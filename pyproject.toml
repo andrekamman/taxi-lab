@@ -36,6 +36,14 @@ packages = [
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 
+# taxi-seed v0.1.0 (the only release on PyPI) predates the k6 removal and still
+# ships a k6_loadtest package. Installed from PyPI it lands in site-packages as a
+# real directory and SHADOWS this repo's own k6_loadtest, so taxi-lab's code
+# silently never runs. Until a taxi-seed release drops it, resolve taxi-seed from
+# the sibling checkout. Replace with a plain version pin once that release exists.
+[tool.uv.sources]
+taxi-seed = { path = "../taxi-seed", editable = true }
+
 [project.scripts]
 k6-preprocess = "k6_loadtest.preprocess:main"
 

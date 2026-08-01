@@ -1,6 +1,7 @@
 """Read parquet files via DuckDB and export as chunked JSON."""
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
 import duckdb
@@ -86,6 +87,14 @@ def export_chunks(
                 # Serialize timestamps as ISO 8601
                 if hasattr(val, "isoformat"):
                     val = val.isoformat()
+                # Serialize DECIMAL as a string, not a JSON number. The target
+                # column is DECIMAL(p,s) (see taxi_shared.type_mapping), but the
+                # value reaches it via k6's JSON.parse, which has only doubles --
+                # so a JSON number silently becomes binary floating point before
+                # it is ever bound. A string is passed through to SQL Server's
+                # implicit conversion and lands in the column exactly.
+                elif isinstance(val, Decimal):
+                    val = str(val)
                 row_dict[name] = val
             chunk_data.append(row_dict)
 

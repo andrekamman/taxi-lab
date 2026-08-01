@@ -24,8 +24,26 @@ PyPI. Anything that *uses* the resulting data set lives in this repo.
 uv sync --extra test
 ```
 
-`taxi-seed` comes from PyPI. `k6_loadtest` imports `taxi_shared` from it, so it is a hard
-dependency rather than an optional one.
+`k6_loadtest` imports `taxi_shared` from `taxi-seed`, so taxi-seed is a hard dependency
+rather than an optional one.
+
+**taxi-seed currently resolves from a sibling checkout, not PyPI.** Clone the two repos
+side by side:
+
+```
+~/git/
+  taxi-seed/
+  taxi-lab/
+```
+
+The reason is a packaging collision: taxi-seed `v0.1.0` — the only release on PyPI —
+predates the k6 removal and still ships its own `k6_loadtest` package. Installed from
+PyPI it lands in `site-packages` as a real directory and *shadows* this repo's
+`k6_loadtest`, so taxi-lab's code silently never runs and its tests exercise taxi-seed's
+frozen copy instead. The removal is on taxi-seed `main` but has never been tagged.
+
+Once a taxi-seed release drops `k6_loadtest`, delete the `[tool.uv.sources]` block in
+`pyproject.toml` and pin that version instead.
 
 ## Test
 
