@@ -1420,6 +1420,7 @@ git commit -m "feat(seeder): presized provisioning with autogrowth warning"
 
 **Files:**
 - Create: `seeder/src/taxi_seeder/ola.py`, `seeder/sql/MaintenanceSolution.sql`, `seeder/sql/VERSION`
+- Modify: `pyproject.toml` (force-include, see Step 1a)
 - Test: `tests/taxi_seeder/test_ola.py`
 
 **Interfaces:**
@@ -1438,6 +1439,23 @@ printf 'v2024.1\n' > seeder/sql/VERSION
 ```
 
 The file stays pristine so it remains diffable against upstream; the two edits happen in `prepare_maintenance_solution` (Task 4).
+
+- [ ] **Step 1a: Ship `sql/` as package data**
+
+`seeder/sql/` is outside `src/`, so the wheel would not contain it and the container would resolve `VENDORED_SCRIPT` to a path that does not exist — a failure no unit test catches, because the tests inject `script=`. Add to `pyproject.toml`:
+
+```toml
+[tool.hatch.build.targets.wheel.force-include]
+"seeder/sql" = "taxi_seeder/sql"
+```
+
+Then `uv sync --extra test` and confirm the file resolves through the installed package:
+
+```bash
+uv run python -c "from taxi_seeder.ola import VENDORED_SCRIPT; print(VENDORED_SCRIPT, VENDORED_SCRIPT.is_file())"
+```
+
+Expected: a path ending `taxi_seeder/sql/MaintenanceSolution.sql` and `True`.
 
 - [ ] **Step 2: Write the failing test**
 
@@ -1525,7 +1543,10 @@ from pathlib import Path
 from taxi_seeder import mssql, sql
 from taxi_seeder.config import Settings
 
-VENDORED_SCRIPT = Path(__file__).resolve().parent.parent.parent / "sql" / "MaintenanceSolution.sql"
+# seeder/sql is force-included into the wheel as taxi_seeder/sql (see
+# pyproject.toml), so this one hop resolves identically in an editable dev
+# install, a built wheel, and the container image.
+VENDORED_SCRIPT = Path(__file__).resolve().parent / "sql" / "MaintenanceSolution.sql"
 
 
 def is_installed(settings: Settings, *, runner=None) -> bool:
