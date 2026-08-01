@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# k6: the xk6-built binary and preprocessor output are build artifacts
+k6-loadtest/k6
+k6-loadtest/output/
+k6-loadtest/config.yaml
+k6_output/
+
+# seeder: local compose env and any data dir accidentally created in-tree
+seeder/.env
+data/
