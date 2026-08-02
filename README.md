@@ -4,8 +4,9 @@ Recipes for things to *do* with the NYC TLC taxi data set.
 
 This repo is a consumer of [`taxi-seed`](https://github.com/andrekamman/taxi-seed), not a
 fork of it. taxi-seed produces the data — it owns the downloader, the schema-drift
-analyzer, the normalizer, the loader, and the orchestrator, and is installed here from
-PyPI. Anything that *uses* the resulting data set lives in this repo.
+analyzer, the normalizer, the loader, and the orchestrator, and is consumed here as a
+dependency (currently resolved from a sibling checkout rather than PyPI — see
+[Install](#install)). Anything that *uses* the resulting data set lives in this repo.
 
 ## Components
 
