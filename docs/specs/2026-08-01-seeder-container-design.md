@@ -280,9 +280,15 @@ producing exactly the file fragmentation presizing was meant to avoid. The
 warning turns a silent performance cliff into a visible one.
 
 Remedies, both documented: set `MSSQL_DATA_SIZE_GB` on the first run when the
-eventual scope is already known, or delete the mdf and ldf and re-run — the next
-run finds no database, re-presizes from the now-complete `raw-normalized/`, and
-reloads from parquet.
+eventual scope is already known, or re-presize — `DROP DATABASE [taxi]`, *then*
+delete the mdf and ldf, then re-run, so the next run finds no database, no files
+to attach, re-presizes from the now-complete `raw-normalized/`, and reloads from
+parquet.
+
+The order matters and the warning states it. Deleting the files while the server
+still has the database registered leaves it `RECOVERY_PENDING`: `DB_ID('taxi')`
+is non-NULL, so provisioning takes the skip branch and then fails querying
+`sys.database_files` on a database that cannot be opened.
 
 ### Instant file initialization — open risk
 

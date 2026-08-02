@@ -138,6 +138,22 @@ def test_warns_when_the_existing_file_is_too_small(tmp_path, capsys):
     assert "MSSQL_DATA_SIZE_GB" in out
 
 
+def test_the_autogrowth_remedy_drops_the_database_before_deleting_the_files(
+    tmp_path, capsys
+):
+    """Deleting the mdf/ldf while the server still has the database registered
+    leaves it RECOVERY_PENDING: the next run takes the skip branch and then dies
+    querying sys.database_files against a database it cannot open. The message
+    has to name the step that actually works."""
+    s = settings_for(tmp_path)
+    write_parquet(tmp_path, "yellow", 40 * GB)
+    rec = Recorder(["1", "10240"])
+
+    provision.run(s, runner=rec)
+
+    assert "DROP DATABASE [taxi]" in capsys.readouterr().out
+
+
 def test_stays_quiet_when_the_existing_file_is_ample(tmp_path, capsys):
     s = settings_for(tmp_path)
     write_parquet(tmp_path, "yellow", 1 * GB)   # implies 10 GB

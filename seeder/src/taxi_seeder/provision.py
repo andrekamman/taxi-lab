@@ -60,9 +60,14 @@ def run(settings: Settings, *, runner=None) -> bool:
                 f"           Sizing only runs at creation, so the file will autogrow in "
                 f"{settings.filegrowth_mb} MB steps -- the fragmentation presizing exists "
                 f"to avoid.\n"
-                f"           Set MSSQL_DATA_SIZE_GB on a fresh database, or delete "
-                f"{settings.mdf_path} and {settings.ldf_path} and re-run to re-presize "
-                f"and reload from parquet."
+                f"           Set MSSQL_DATA_SIZE_GB on a fresh database, or "
+                f"re-presize: run DROP DATABASE [{settings.database}], then delete "
+                f"{settings.mdf_path} and {settings.ldf_path}, then re-run to "
+                f"re-presize and reload from parquet.\n"
+                f"           Deleting the files first is not enough -- the server "
+                f"still has {settings.database!r} registered, so the next run skips "
+                f"provisioning and then fails reading the file sizes of a database "
+                f"it cannot open."
             )
         else:
             print(f"provision: database {settings.database!r} exists, skipping")
