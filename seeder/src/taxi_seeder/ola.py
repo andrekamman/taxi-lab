@@ -8,6 +8,18 @@ from taxi_seeder import mssql, sql
 from taxi_seeder.config import Settings
 
 
+class OlaScriptMissingError(Exception):
+    """The vendored MaintenanceSolution.sql could not be found on disk. Maps
+    to exit code 2."""
+
+
+# seeder/src/taxi_seeder/ola.py -> parents[2] == seeder/. Both candidates are
+# named at module scope (not just computed inline) so a missing-script error
+# in run() can report exactly where it looked, not just where it landed.
+_SIBLING_CANDIDATE = Path(__file__).resolve().parent / "sql" / "MaintenanceSolution.sql"
+_FALLBACK_CANDIDATE = Path(__file__).resolve().parents[2] / "sql" / "MaintenanceSolution.sql"
+
+
 def _resolve_vendored_script() -> Path:
     """seeder/sql is force-included into the wheel as taxi_seeder/sql (see
     pyproject.toml), so in a built wheel -- and thus in the container image,
@@ -22,11 +34,9 @@ def _resolve_vendored_script() -> Path:
     path with VENDORED_SCRIPT.is_file() == True; under `uv sync` it's False.
     Fall back to the repo-relative path so local dev and tests work too.
     """
-    sibling = Path(__file__).resolve().parent / "sql" / "MaintenanceSolution.sql"
-    if sibling.is_file():
-        return sibling
-    # seeder/src/taxi_seeder/ola.py -> parents[2] == seeder/
-    return Path(__file__).resolve().parents[2] / "sql" / "MaintenanceSolution.sql"
+    if _SIBLING_CANDIDATE.is_file():
+        return _SIBLING_CANDIDATE
+    return _FALLBACK_CANDIDATE
 
 
 VENDORED_SCRIPT = _resolve_vendored_script()
@@ -43,8 +53,23 @@ def run(settings: Settings, *, script: Path = VENDORED_SCRIPT, runner=None) -> b
         print("ola: MaintenanceSolution already installed, skipping")
         return False
 
+    script = Path(script)
+    if not script.is_file():
+        # A broken package build (e.g. the force-include silently dropped
+        # from pyproject.toml) must surface as a typed, exit-2 error here,
+        # not as a bare FileNotFoundError from read_text() below -- the
+        # exception-to-exit-code mapping only knows about typed errors.
+        raise OlaScriptMissingError(
+            f"vendored MaintenanceSolution.sql not found at {script}. "
+            f"Checked the wheel-sibling location ({_SIBLING_CANDIDATE}) and "
+            f"the repo-relative dev fallback ({_FALLBACK_CANDIDATE}); the "
+            "installed wheel is likely missing its force-included sql/ "
+            "directory -- see pyproject.toml "
+            "[tool.hatch.build.targets.wheel.force-include]."
+        )
+
     patched = sql.prepare_maintenance_solution(
-        Path(script).read_text(), str(settings.backup_dir)
+        script.read_text(), str(settings.backup_dir)
     )
     # sqlcmd -i is required: the script is batch-separated by GO, which only the
     # client understands. The patched copy is temporary; the vendored file on

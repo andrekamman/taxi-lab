@@ -1,4 +1,7 @@
+import re
 import subprocess
+
+import pytest
 
 from taxi_seeder import ola, sql
 from taxi_seeder.config import from_env
@@ -62,6 +65,16 @@ def test_is_installed_reads_the_object_id_probe():
     rec = Recorder(["1"])
     assert ola.is_installed(SETTINGS, runner=rec) is True
     assert "dbo.DatabaseBackup" in rec.statements[0]
+
+
+def test_run_raises_a_typed_error_when_the_script_is_missing(tmp_path):
+    """A broken package build (e.g. the wheel's force-included sql/
+    directory silently dropped) must fail with a typed, exit-2 error naming
+    the missing path -- not a bare FileNotFoundError that the CLI's
+    exception-to-exit-code mapping (Task 11) doesn't know about."""
+    missing = tmp_path / "does-not-exist" / "MaintenanceSolution.sql"
+    with pytest.raises(ola.OlaScriptMissingError, match=re.escape(str(missing))):
+        ola.run(SETTINGS, script=missing, runner=Recorder(["0"]))
 
 
 def test_prepare_maintenance_solution_patches_the_real_vendored_file():
