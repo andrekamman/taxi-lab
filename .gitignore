@@ -16,3 +16,7 @@ k6_output/
 # seeder: local compose env and any data dir accidentally created in-tree
 seeder/.env
 data/
+
+# transient empty env file the integration test uses to make Compose ignore
+# seeder/.env, so a machine-local file cannot influence the run
+seeder/.env.integration-empty

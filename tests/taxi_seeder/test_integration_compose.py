@@ -60,9 +60,18 @@ def compose(*args, data_dir, check=True, timeout=DEFAULT_TIMEOUT):
         "TAXI_TYPES": "yellow",
         "TAXI_RECENT": "1",
     }
+    # --env-file with an empty file suppresses Compose's automatic loading of
+    # seeder/.env. That file is gitignored, so whether it exists and what it
+    # contains varies per machine -- and a stale one silently overrode the
+    # sizing this test exists to exercise, making the run pass or fail for
+    # reasons that had nothing to do with the code. Only the env set above may
+    # influence the stack.
+    empty_env_file = COMPOSE_DIR / ".env.integration-empty"
+    empty_env_file.write_text("")
     try:
         return subprocess.run(
-            ["docker", "compose", *args], cwd=COMPOSE_DIR, env=env,
+            ["docker", "compose", "--env-file", str(empty_env_file), *args],
+            cwd=COMPOSE_DIR, env=env,
             capture_output=True, text=True, check=check, timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:

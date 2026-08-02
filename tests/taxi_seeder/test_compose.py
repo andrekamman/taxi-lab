@@ -73,3 +73,29 @@ def test_the_readme_documents_an_invocation_that_returns_the_seeders_exit_code()
             break
     else:
         pytest.fail("README documents no `docker compose up` invocation")
+
+
+# Every variable whose default lives in config.from_env. Compose must forward
+# them, but must NEVER supply its own default -- see the test below.
+_APP_OWNED_DEFAULTS = [
+    "TAXI_TYPES", "TAXI_RECENT", "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB",
+    "MSSQL_LOG_SIZE_GB", "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT",
+    "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER",
+]
+
+
+@pytest.mark.parametrize("var", _APP_OWNED_DEFAULTS)
+def test_compose_does_not_duplicate_a_default_config_owns(compose, var):
+    """Compose forwards these empty when unset; config.from_env supplies the value.
+
+    This is not style. `MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-16}` meant the
+    container always saw the variable as explicitly set, so the log could never
+    scale down with the run -- a 128 MB dataset demanded a 16 GB log and the
+    first real end-to-end run failed on disk space. Two sources of truth for one
+    default drift the moment either moves.
+    """
+    value = compose["services"]["seeder"]["environment"][var]
+    assert value == f"${{{var}:-}}", (
+        f"{var} must be forwarded as ${{{var}:-}} (empty when unset) so "
+        f"config.from_env owns its default; found {value!r}"
+    )

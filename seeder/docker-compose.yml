@@ -53,21 +53,27 @@ services:
     environment:
       MSSQL_PASSWORD: ${MSSQL_PASSWORD:?}
       TAXI_DATA_DIR: /data
-      TAXI_TYPES: ${TAXI_TYPES:-yellow,green,fhv,fhvhv}
+      # Pass through EMPTY when unset -- never repeat a default that
+      # config.from_env already owns. Compose's `:-16` on MSSQL_LOG_SIZE_GB used
+      # to look harmless, but it meant the container always saw the variable as
+      # explicitly set, so the log could never scale down with the run: a 128 MB
+      # test dataset demanded a 16 GB log. Two sources of truth for one default
+      # drift the moment either moves. config.from_env treats empty as unset.
+      TAXI_TYPES: ${TAXI_TYPES:-}
       TAXI_RECENT: ${TAXI_RECENT:-}
-      TAXI_DATA_FACTOR: ${TAXI_DATA_FACTOR:-3.0}
+      TAXI_DATA_FACTOR: ${TAXI_DATA_FACTOR:-}
       MSSQL_DATA_SIZE_GB: ${MSSQL_DATA_SIZE_GB:-}
-      MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-16}
-      MSSQL_FILEGROWTH_MB: ${MSSQL_FILEGROWTH_MB:-1024}
+      MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-}
+      MSSQL_FILEGROWTH_MB: ${MSSQL_FILEGROWTH_MB:-}
       # Every remaining variable config.from_env reads. Listed even where the
       # default is the only sane value in this stack: a variable documented in
       # .env.example that never reaches the container is worse than an
       # undocumented one.
-      MSSQL_HOST: ${MSSQL_HOST:-mssql}
-      MSSQL_PORT: ${MSSQL_PORT:-1433}
-      MSSQL_DATABASE: ${MSSQL_DATABASE:-taxi}
-      MSSQL_SCHEMA: ${MSSQL_SCHEMA:-dbo}
-      MSSQL_USER: ${MSSQL_USER:-sa}
+      MSSQL_HOST: ${MSSQL_HOST:-}
+      MSSQL_PORT: ${MSSQL_PORT:-}
+      MSSQL_DATABASE: ${MSSQL_DATABASE:-}
+      MSSQL_SCHEMA: ${MSSQL_SCHEMA:-}
+      MSSQL_USER: ${MSSQL_USER:-}
     volumes:
       - ${TAXI_DATA_DIR}:/data
     working_dir: /data
