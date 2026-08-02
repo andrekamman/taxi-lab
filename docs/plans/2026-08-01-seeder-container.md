@@ -1432,10 +1432,10 @@ git commit -m "feat(seeder): presized provisioning with autogrowth warning"
 ```bash
 mkdir -p seeder/sql
 curl -fsSL -o seeder/sql/MaintenanceSolution.sql \
-  https://raw.githubusercontent.com/olahallengren/sql-server-maintenance-solution/v2024.1/MaintenanceSolution.sql
+  https://raw.githubusercontent.com/olahallengren/sql-server-maintenance-solution/20260723_232218/MaintenanceSolution.sql
 grep -c "SET @CreateJobs" seeder/sql/MaintenanceSolution.sql   # expect 1
 grep -c "SET @BackupDirectory" seeder/sql/MaintenanceSolution.sql  # expect 1
-printf 'v2024.1\n' > seeder/sql/VERSION
+printf '20260723_232218\n' > seeder/sql/VERSION
 ```
 
 The file stays pristine so it remains diffable against upstream; the two edits happen in `prepare_maintenance_solution` (Task 4).
