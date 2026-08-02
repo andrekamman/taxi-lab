@@ -27,7 +27,7 @@ class Settings:
     user: str
     data_factor: float
     data_size_gb: int | None
-    log_size_gb: int
+    log_size_gb: int | None
     filegrowth_mb: int
 
     @property
@@ -120,6 +120,11 @@ def from_env(env: Mapping[str, str]) -> Settings:
     if data_size_gb is not None and data_size_gb < 1:
         raise ConfigError(f"MSSQL_DATA_SIZE_GB must be >= 1, got {data_size_gb}")
 
+    log_size_raw = (env.get("MSSQL_LOG_SIZE_GB") or "").strip()
+    log_size_gb = _int(env, "MSSQL_LOG_SIZE_GB", 0) if log_size_raw else None
+    if log_size_gb is not None and log_size_gb < 1:
+        raise ConfigError(f"MSSQL_LOG_SIZE_GB must be >= 1, got {log_size_gb}")
+
     return Settings(
         data_dir=Path(env.get("TAXI_DATA_DIR") or "/data"),
         types=_types(env.get("TAXI_TYPES") or ",".join(DATA_TYPES)),
@@ -135,6 +140,6 @@ def from_env(env: Mapping[str, str]) -> Settings:
         user=(env.get("MSSQL_USER") or "").strip() or "sa",
         data_factor=factor,
         data_size_gb=data_size_gb,
-        log_size_gb=_int(env, "MSSQL_LOG_SIZE_GB", 16),
+        log_size_gb=log_size_gb,
         filegrowth_mb=_int(env, "MSSQL_FILEGROWTH_MB", 1024),
     )

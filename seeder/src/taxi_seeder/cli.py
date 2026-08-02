@@ -35,10 +35,12 @@ environment variables:
   TAXI_RECENT           most recent N months to mirror; blank means full
                         history
   TAXI_DATA_FACTOR      mdf size = normalized parquet bytes x this factor,
-                        rounded up to 10 GB (default: 3.0)
+                        rounded up to 1 GB below 10 GB implied, else 10 GB
+                        (default: 3.0)
   MSSQL_DATA_SIZE_GB    skip the size estimate and use this instead; only
                         consulted at database creation
-  MSSQL_LOG_SIZE_GB     ldf size in GB (default: 16)
+  MSSQL_LOG_SIZE_GB     ldf size in GB (default: 25% of the mdf size,
+                        floored at 1 GB and capped at 16 GB)
   MSSQL_FILEGROWTH_MB   data/log filegrowth in MB (default: 1024)
   MSSQL_HOST            SQL Server host (default: mssql, the compose service)
   MSSQL_PORT            SQL Server port (default: 1433)
@@ -129,7 +131,8 @@ def main(argv=None) -> int:
         backup.run(settings)
 
     except (mssql.MssqlError, sql.SqlIdentifierError, ola.OlaScriptMissingError,
-            stages.StageCommandNotFoundError) as e:
+            stages.StageCommandNotFoundError,
+            provision.InsufficientDiskSpaceError) as e:
         print(f"error: {e}", file=sys.stderr)
         return FAILURE
 

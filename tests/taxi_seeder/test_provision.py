@@ -1,9 +1,29 @@
+import shutil
 import subprocess
+from collections import namedtuple
+
+import pytest
 
 from taxi_seeder import provision
 from taxi_seeder.config import from_env
 
 GB = 1024 ** 3
+MB = 1024 ** 2
+
+DiskUsage = namedtuple("DiskUsage", "total used free")
+
+
+@pytest.fixture(autouse=True)
+def ample_free_disk(monkeypatch):
+    """provision.run now checks real free space before creating a database.
+
+    Unit tests exercise sizes the sandbox's actual free disk cannot back --
+    that gap is exactly the bug Finding 2 exists to catch -- so default every
+    test to abundant free space. The tests that exercise the check itself
+    override this explicitly.
+    """
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda path: DiskUsage(10_000 * GB, 0, 10_000 * GB))
 
 
 def settings_for(tmp_path, **env):
@@ -53,8 +73,23 @@ def test_creates_a_presized_database_when_absent(tmp_path):
     joined = "\n".join(rec.statements)
     assert "CREATE DATABASE [taxi]" in joined
     assert "SIZE = 20480MB" in joined      # 4 GB x 3.0 = 12 -> 20 GB
-    assert "SIZE = 16384MB" in joined      # log default
+    assert "SIZE = 5120MB" in joined       # log default: 25% of 20 GB = 5 GB
     assert "SET RECOVERY SIMPLE" in joined
+
+
+def test_creates_a_small_presized_database_for_a_small_run(tmp_path):
+    """The TAXI_RECENT=1 smoke path implies well under 10 GB of data -- the old
+    flat 10 GB floor demanded a 10 GB mdf (and a flat 16 GB ldf) regardless."""
+    s = settings_for(tmp_path)
+    write_parquet(tmp_path, "yellow", 128 * MB)  # x 3.0 default factor ~= 384 MB
+    rec = Recorder(["0"])
+
+    provision.run(s, runner=rec)
+
+    joined = "\n".join(rec.statements)
+    assert "SIZE = 1024MB" in joined       # rounds up to 1 GB, not 10 GB
+    assert "SIZE = 10240MB" not in joined
+    assert "SIZE = 16384MB" not in joined  # log follows the small mdf down too
 
 
 def test_creation_warns_that_the_allocation_may_run_silently_for_a_long_time(
@@ -174,7 +209,7 @@ def test_the_autogrowth_remedy_drops_the_database_before_deleting_the_files(
 
 def test_stays_quiet_when_the_existing_file_is_ample(tmp_path, capsys):
     s = settings_for(tmp_path)
-    write_parquet(tmp_path, "yellow", 1 * GB)   # implies 10 GB
+    write_parquet(tmp_path, "yellow", 1 * GB)   # 1 GB x 3.0 = 3 GB implied
     rec = Recorder(["1", "102400"])             # allocated 100 GB
 
     provision.run(s, runner=rec)
@@ -190,3 +225,51 @@ def test_stays_quiet_when_the_allocation_cannot_be_read(tmp_path, capsys):
     provision.run(s, runner=rec)
 
     assert "WARNING" not in capsys.readouterr().out
+
+
+def test_raises_when_the_disk_cannot_fit_the_planned_allocation(tmp_path, monkeypatch):
+    """The real failure this guards against: a 128 MB smoke run on a host with
+    18 GB free, where the old flat 10 GB + 16 GB sizing demanded 26 GB and SQL
+    Server died mid-CREATE DATABASE with a bare OS error. Catch it before
+    sqlcmd is even invoked, with a message naming both levers."""
+    s = settings_for(tmp_path, MSSQL_DATA_SIZE_GB="100", MSSQL_LOG_SIZE_GB="20")
+    rec = Recorder(["0"])  # database_exists -> 0
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda path: DiskUsage(50 * GB, 40 * GB, 10 * GB))
+
+    with pytest.raises(provision.InsufficientDiskSpaceError) as exc_info:
+        provision.run(s, runner=rec)
+
+    message = str(exc_info.value)
+    assert "MSSQL_DATA_SIZE_GB" in message
+    assert "MSSQL_LOG_SIZE_GB" in message
+    assert "121" in message   # required: 100 GB data + 20 GB log + 1 GB headroom
+    assert "10.0" in message  # free
+    assert "CREATE DATABASE" not in "\n".join(rec.statements)
+
+
+def test_does_not_raise_when_the_disk_has_just_enough_room(tmp_path, monkeypatch):
+    s = settings_for(tmp_path, MSSQL_DATA_SIZE_GB="10", MSSQL_LOG_SIZE_GB="1")
+    rec = Recorder(["0"])
+    # 10 GB + 1 GB + 1 GB headroom (sizing.DISK_HEADROOM_MB) = 12 GB required.
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda path: DiskUsage(20 * GB, 8 * GB, 12 * GB))
+
+    created = provision.run(s, runner=rec)
+
+    assert created is True
+    assert "CREATE DATABASE [taxi]" in "\n".join(rec.statements)
+
+
+def test_disk_space_is_not_checked_on_the_attach_path(tmp_path, monkeypatch):
+    """Attaching an existing mdf/ldf allocates nothing new -- there is nothing
+    for the free-space check to protect against, so it must not run there."""
+    s = settings_for(tmp_path)
+    make_existing_files(s)
+    write_parquet(tmp_path, "yellow", 4 * GB)
+    rec = Recorder(["0"])  # database_exists -> 0
+    monkeypatch.setattr(shutil, "disk_usage",
+                        lambda path: DiskUsage(1 * GB, 1 * GB, 0))  # no free space at all
+
+    assert provision.run(s, runner=rec) is True
+    assert "FOR ATTACH" in "\n".join(rec.statements)

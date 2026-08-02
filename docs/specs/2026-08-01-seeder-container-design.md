@@ -121,7 +121,7 @@ creation would fail noisily and pointlessly.
 | `TAXI_RECENT` | unset | When set to N, passes `--recent N`; unset means full history. |
 | `TAXI_DATA_FACTOR` | `3.0` | Multiplier from normalized parquet bytes to mdf size. |
 | `MSSQL_DATA_SIZE_GB` | unset | Explicit mdf size; bypasses the estimate entirely. |
-| `MSSQL_LOG_SIZE_GB` | `16` | Explicit ldf size. |
+| `MSSQL_LOG_SIZE_GB` | unset | Explicit ldf size; bypasses the default (25% of mdf, floored at 1 GB, capped at 16 GB). |
 | `MSSQL_FILEGROWTH_MB` | `1024` | Autogrowth increment for both files. |
 | `MSSQL_HOST` | `mssql` | SQL Server host; the Compose service name. |
 | `MSSQL_PORT` | `1433` | SQL Server port. |
@@ -218,9 +218,14 @@ never partial.
 
 ```
 bytes  = sum of size(raw-normalized/<type>/) for type in TAXI_TYPES
-mdf    = bytes * TAXI_DATA_FACTOR, rounded up to the next multiple of 10 GB
+raw    = bytes * TAXI_DATA_FACTOR
+mdf    = raw rounded up to the next 1 GB, if raw < 10 GB
+         raw rounded up to the next 10 GB, otherwise
          (or MSSQL_DATA_SIZE_GB when set, used verbatim)
-ldf    = MSSQL_LOG_SIZE_GB
+         floored at 1 GB either way, so a tiny or empty mirror still gets a
+         usable, nonzero file
+ldf    = min(16 GB, max(1 GB, 25% of mdf))
+         (or MSSQL_LOG_SIZE_GB when set, used verbatim)
 growth = MSSQL_FILEGROWTH_MB on both files
 ```
 
@@ -236,9 +241,34 @@ ratio. Parquet is itself compressed and the target tables are page-compressed,
 so the ratio is far narrower than an uncompressed comparison would suggest.
 Autogrowth covers an underestimate; `MSSQL_DATA_SIZE_GB` covers a known answer.
 
-The log is a flat default rather than a fraction of the data size. Under SIMPLE
-recovery with `TABLOCK` bulk loads the log truncates on checkpoint and never
-tracks data volume, so scaling it to the data would waste hundreds of GB.
+**Data granularity scales down for small runs.** A flat 10 GB granularity with
+a one-granule floor meant *every* run -- including the `TAXI_RECENT=1` smoke
+path's ~128 MB of parquet -- demanded a 10 GB mdf regardless of how little data
+it actually held. Below a 10 GB implied size, rounding uses 1 GB granularity
+instead, so a 128 MB smoke run gets roughly a 1 GB mdf; at or above 10 GB
+implied, rounding is unchanged. The floor is always 1 GB, never 0.
+
+**The log defaults to a fraction of the data size, capped where the old flat
+default sat.** Under SIMPLE recovery with `TABLOCK` bulk loads the log
+truncates on checkpoint and never tracks data volume, so scaling it linearly to
+the data would waste hundreds of GB on a large database -- 16 GB was always
+meant as a generous ceiling on the default, not a floor or a target. Left
+unset, `MSSQL_LOG_SIZE_GB` now defaults to 25% of the mdf size, floored at 1 GB
+and capped at 16 GB: a full-history run still lands at exactly 16 GB, and a
+small run's ldf shrinks along with its mdf instead of demanding 16 GB flat. An
+explicit `MSSQL_LOG_SIZE_GB` is still honoured verbatim, same as
+`MSSQL_DATA_SIZE_GB`.
+
+### Free space check
+
+Before issuing `CREATE DATABASE`, provisioning compares the planned mdf + ldf
+allocation (plus a small fixed headroom) against `shutil.disk_usage` on
+`TAXI_DATA_DIR`. If it will not fit, the run stops with a typed, exit-2 error
+naming the required size, the free size, and the two levers
+(`MSSQL_DATA_SIZE_GB` / `MSSQL_LOG_SIZE_GB`, or a bigger disk) rather than
+handing the operator a bare SQL Server OS error mid-`CREATE DATABASE`. The
+check only runs on the create path -- attaching an existing mdf/ldf allocates
+nothing new, so there is nothing to check.
 
 ### DDL
 
@@ -357,7 +387,8 @@ correct value is unknown would abort legitimate work.
 If that first integration run shows allocation is slow, the fallback stands: a
 modest initial size plus 1 GB autogrowth, which surrenders some fragmentation
 benefit and nothing else. Log files are always zero-filled on every platform,
-which is a further argument for keeping the ldf at 16 GB.
+which is a further argument for keeping the ldf's default capped rather than
+scaling it linearly with a large mdf.
 
 ## Page compression
 
@@ -462,7 +493,7 @@ Each step maps failure onto `taxi-seed`'s existing convention:
 |---|---|---|
 | 0 | clean | everything current, or advanced successfully |
 | 1 | needs review | normalize halted on unacknowledged schema drift |
-| 2 | operational failure | SQL Server unreachable, `CREATE DATABASE` failed, backup failed verification |
+| 2 | operational failure | SQL Server unreachable, `CREATE DATABASE` failed, the data volume cannot fit the planned allocation, backup failed verification |
 
 The mapping is stage-aware, because the child CLIs do not agree on what `1`
 means. `taxi-run` returns `1` only for normalize's schema-drift halt, which is
@@ -506,7 +537,10 @@ the risk testable without a database.
 
 **Unit** — the pure logic, which is where the risk concentrates:
 
-- size calculation, rounding, `MSSQL_DATA_SIZE_GB` override, per-type summing
+- size calculation, rounding (both the 1 GB and 10 GB granularities and their
+  switchover), `MSSQL_DATA_SIZE_GB` / `MSSQL_LOG_SIZE_GB` overrides, the log's
+  default fraction/floor/cap, per-type summing
+- free-space arithmetic: required-vs-free, independent of the filesystem
 - backup staleness: no `.bak`; `.bak` newer than `MAX(loaded_at)`; `.bak` older
   than `MAX(loaded_at)` (the died-before-backup case); NULL manifest
 - autogrowth warning threshold, above and below 25%

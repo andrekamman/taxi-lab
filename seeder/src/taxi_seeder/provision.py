@@ -2,8 +2,14 @@
 server's memory of it, or explain why it was skipped."""
 from __future__ import annotations
 
+import shutil
+
 from taxi_seeder import mssql, sizing, sql
 from taxi_seeder.config import Settings
+
+
+class InsufficientDiskSpaceError(Exception):
+    """The data volume cannot fit the planned mdf/ldf allocation. Exit code 2."""
 
 
 def implied_data_mb(settings: Settings) -> int:
@@ -86,7 +92,20 @@ def run(settings: Settings, *, runner=None) -> bool:
                   database="master", runner=runner)
         return True
 
-    log_mb = sizing.log_size_mb(settings.log_size_gb)
+    log_mb = sizing.log_size_mb(data_mb, settings.log_size_gb)
+
+    required_mb = sizing.required_disk_mb(data_mb, log_mb)
+    free_mb = shutil.disk_usage(settings.data_dir).free // (1024 ** 2)
+    if not sizing.fits_on_disk(required_mb, free_mb):
+        raise InsufficientDiskSpaceError(
+            f"provisioning {settings.database!r} needs "
+            f"{required_mb / 1024:.1f} GB free on {settings.data_dir} "
+            f"({data_mb / 1024:.0f} GB data + {log_mb / 1024:.0f} GB log, "
+            f"plus headroom), but only {free_mb / 1024:.1f} GB is free. "
+            f"Lower MSSQL_DATA_SIZE_GB and/or MSSQL_LOG_SIZE_GB, or use a "
+            f"bigger disk."
+        )
+
     print(
         f"provision: creating {settings.database!r} with "
         f"{data_mb / 1024:.0f} GB data + {log_mb / 1024:.0f} GB log"

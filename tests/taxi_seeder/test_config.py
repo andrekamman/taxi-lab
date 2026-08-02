@@ -11,7 +11,7 @@ def test_defaults():
     assert s.types == ("yellow", "green", "fhv", "fhvhv")
     assert s.recent is None
     assert s.data_factor == 3.0
-    assert s.log_size_gb == 16
+    assert s.log_size_gb is None
     assert s.filegrowth_mb == 1024
     assert s.data_size_gb is None
     assert s.database == "taxi"
@@ -53,6 +53,24 @@ def test_factor_must_be_positive():
 
 def test_explicit_data_size_overrides_estimate():
     assert from_env({**BASE, "MSSQL_DATA_SIZE_GB": "500"}).data_size_gb == 500
+
+
+def test_data_size_must_be_positive():
+    with pytest.raises(ConfigError, match="MSSQL_DATA_SIZE_GB"):
+        from_env({**BASE, "MSSQL_DATA_SIZE_GB": "0"})
+
+
+def test_explicit_log_size_overrides_default():
+    assert from_env({**BASE, "MSSQL_LOG_SIZE_GB": "4"}).log_size_gb == 4
+
+
+def test_blank_log_size_means_unset():
+    assert from_env({**BASE, "MSSQL_LOG_SIZE_GB": ""}).log_size_gb is None
+
+
+def test_log_size_must_be_positive():
+    with pytest.raises(ConfigError, match="MSSQL_LOG_SIZE_GB"):
+        from_env({**BASE, "MSSQL_LOG_SIZE_GB": "0"})
 
 
 def test_database_name_is_validated_at_config_time():
