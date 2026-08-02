@@ -1,4 +1,5 @@
-"""Step 3: create the presized database, or explain why it was skipped."""
+"""Step 3: create the presized database, attach one whose files outlived the
+server's memory of it, or explain why it was skipped."""
 from __future__ import annotations
 
 from taxi_seeder import mssql, sizing, sql
