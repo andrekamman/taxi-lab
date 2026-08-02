@@ -64,6 +64,35 @@ def is_stale(loaded_at: datetime | None,
     return loaded_at > newest_backup_mtime
 
 
+def _discard_backups_newer_than(settings: Settings,
+                                baseline: datetime | None) -> list[Path]:
+    """Delete every .bak that appeared during a failed backup attempt.
+
+    Ola's DatabaseBackup, when RESTORE VERIFYONLY fails, only skips *cleanup* --
+    it leaves the unverified .bak on disk with a fresh mtime. Staleness is an
+    mtime comparison with no notion of "did this file verify", so left in place
+    that file makes the next run print "backup: current", exit 0, and present a
+    corrupt backup as the deliverable. Removing it restores the invariant that
+    the newest .bak on disk is one that verified.
+    """
+    if not settings.backup_dir.is_dir():
+        return []
+    removed: list[Path] = []
+    for path in sorted(settings.backup_dir.rglob("*.bak")):
+        if baseline is not None and backup_mtime(path) <= baseline:
+            continue
+        try:
+            path.unlink()
+        except OSError as e:
+            # Never let cleanup replace the MssqlError that is being re-raised:
+            # that error is the real diagnosis, and an OSError escaping here is
+            # untyped and would bypass cli.main's exit-code mapping.
+            print(f"backup: WARNING could not remove unverified {path}: {e}")
+            continue
+        removed.append(path)
+    return removed
+
+
 def run(settings: Settings, *, runner=None) -> bool:
     """Back up when stale. Returns True when a backup was taken."""
     loaded_at = max_loaded_at(settings, runner=runner)
@@ -75,6 +104,12 @@ def run(settings: Settings, *, runner=None) -> bool:
         return False
 
     print(f"backup: taking a verified compressed FULL backup to {settings.backup_dir}")
-    mssql.run(settings, sql.database_backup(settings.database, str(settings.backup_dir)),
-              database="master", runner=runner)
+    try:
+        mssql.run(settings,
+                  sql.database_backup(settings.database, str(settings.backup_dir)),
+                  database="master", runner=runner)
+    except mssql.MssqlError:
+        for path in _discard_backups_newer_than(settings, existing_mtime):
+            print(f"backup: removed unverified {path.name}")
+        raise
     return True

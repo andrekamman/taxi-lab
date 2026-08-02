@@ -345,6 +345,15 @@ EXECUTE dbo.DatabaseBackup
 one is written and verified. There is never a window with zero good backups —
 which a `BEFORE_BACKUP` cleanup, or a literal overwrite, would both open.
 
+**A backup that fails verification is deleted by the seeder.** Ola's response to
+a failed `RESTORE VERIFYONLY` is to skip *cleanup*, not to remove the bad `.bak`
+— which therefore stays on disk with a fresh mtime. Since staleness is an mtime
+comparison with no notion of "did this verify", that file would make the next
+run print "backup: current" and exit 0 offering a corrupt deliverable. So the
+backup step records the newest `.bak` before it starts and, if the backup fails,
+removes anything newer than that before re-raising. The previous verified backup
+is never touched.
+
 `@CleanupTime = 1` deletes backups older than one hour, so the steady state is a
 single `.bak`. Precisely: two runs less than an hour apart leave two files
 briefly, until the next run ages the older one out. This is a deliberate

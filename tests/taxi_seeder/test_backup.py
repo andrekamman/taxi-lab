@@ -122,6 +122,47 @@ def test_run_backs_up_when_stale(tmp_path):
     assert "DatabaseBackup" in "\n".join(rec.statements)
 
 
+def _failing_backup_runner(settings, bad_bak_at, name="bad.bak"):
+    """Answers the manifest query, then fails the backup the way Ola does when
+    RESTORE VERIFYONLY fails: the .bak has already been written, and only the
+    cleanup step is skipped."""
+    def runner(cmd, env, stdin_text):
+        statement = cmd[cmd.index("-Q") + 1] if "-Q" in cmd else ""
+        if "DatabaseBackup" in statement:
+            make_bak(settings, bad_bak_at, name)
+            return subprocess.CompletedProcess(
+                cmd, 1, "", "Msg 3013: VERIFY DATABASE is terminating abnormally.")
+        return subprocess.CompletedProcess(cmd, 0, "2026-08-01T12:00:00.000", "")
+    return runner
+
+
+def test_a_failed_verify_leaves_no_bak_behind_to_poison_the_next_run(tmp_path):
+    """Ola only skips cleanup on a verify failure -- the unverified .bak stays,
+    with an mtime newer than MAX(loaded_at), so the *next* run would report
+    'backup: current', exit 0, and offer a corrupt file as the deliverable."""
+    s = settings_for(tmp_path)
+    good = make_bak(s, T0 - timedelta(hours=2), "good.bak")
+    runner = _failing_backup_runner(s, T0 + timedelta(hours=1))
+
+    with pytest.raises(mssql.MssqlError):
+        backup.run(s, runner=runner)
+
+    assert good.exists(), "the previous verified backup must survive"
+    assert [p.name for p in s.backup_dir.rglob("*.bak")] == ["good.bak"]
+    # And the next run therefore still sees itself as stale.
+    assert backup.is_stale(T0, backup.backup_mtime(backup.newest_backup(s))) is True
+
+
+def test_a_failed_verify_with_no_previous_backup_leaves_nothing(tmp_path):
+    s = settings_for(tmp_path)
+    runner = _failing_backup_runner(s, T0 + timedelta(hours=1))
+
+    with pytest.raises(mssql.MssqlError):
+        backup.run(s, runner=runner)
+
+    assert list(s.backup_dir.rglob("*.bak")) == []
+
+
 def test_run_skips_when_current(tmp_path):
     s = settings_for(tmp_path)
     make_bak(s, T0 + timedelta(hours=1))
