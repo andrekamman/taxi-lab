@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -9,6 +10,13 @@ from pathlib import Path
 from taxi_seeder.config import Settings
 
 SQLCMD = os.environ.get("SQLCMD_PATH", "/opt/mssql-tools18/bin/sqlcmd")
+
+# sqlcmd's "-h -1" suppresses column headers but NOT the row-count trailer, and
+# it goes to stdout mixed in with the results. NOCOUNT stops it being emitted;
+# the pattern below is the belt to that pair of braces, because a batch that
+# sets it back on (a vendored script, a future query) must not corrupt a scalar.
+_NOCOUNT = "SET NOCOUNT ON;"
+_ROWCOUNT_RE = re.compile(r"\A\(\d+ rows? affected\)\Z", re.IGNORECASE)
 
 
 class MssqlError(Exception):
@@ -34,7 +42,7 @@ def build_cmd(settings: Settings, *, database: str,
         "-W",        # strip trailing whitespace
     ]
     if sql is not None:
-        cmd += ["-Q", sql]
+        cmd += ["-Q", f"{_NOCOUNT}\n{sql}"]
     if input_file is not None:
         cmd += ["-i", str(input_file)]
     return cmd
@@ -66,12 +74,27 @@ def run_file(settings: Settings, path: str | Path, *,
     )
 
 
+def first_value(out: str) -> str | None:
+    """The first real value in sqlcmd's stdout, or None for no value / SQL NULL.
+
+    Real output is not a bare token: a NULL scalar arrives as
+    "NULL\\n\\n(1 rows affected)", so blank lines and the row-count trailer have
+    to be skipped before the first line can be trusted. Getting this wrong
+    returned the *string* "NULL" to callers, which is truthy and blew up in
+    datetime.fromisoformat as an untyped ValueError -- a bare traceback with
+    Python's exit code 1, which this project reserves for "needs review".
+    """
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or _ROWCOUNT_RE.match(line):
+            continue
+        return None if line == "NULL" else line
+    return None
+
+
 def scalar(settings: Settings, sql: str, *,
            database: str = "master", runner=None) -> str | None:
-    out = run(settings, sql, database=database, runner=runner).strip()
-    if not out or out == "NULL":
-        return None
-    return out.splitlines()[0].strip() or None
+    return first_value(run(settings, sql, database=database, runner=runner))
 
 
 def wait_for_login(settings: Settings, *, timeout_s: int = 300, sleep_s: int = 5,

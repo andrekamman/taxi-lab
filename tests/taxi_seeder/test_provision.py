@@ -21,8 +21,15 @@ def write_parquet(tmp_path, data_type, size):
         f.truncate(size)
 
 
+def sqlcmd_output(value, rows=1):
+    """Real sqlcmd -h -1 -W output: the value, a blank line, and the row-count
+    trailer that -h -1 does not suppress."""
+    return f"{value}\n\n({rows} rows affected)\n"
+
+
 class Recorder:
-    """Answers scalar queries from a script, records every statement."""
+    """Answers scalar queries from a script of raw values, formatted the way
+    sqlcmd formats them, and records every statement."""
 
     def __init__(self, answers):
         self.answers = list(answers)
@@ -31,7 +38,7 @@ class Recorder:
     def __call__(self, cmd, env, stdin_text):
         sql = cmd[cmd.index("-Q") + 1] if "-Q" in cmd else ""
         self.statements.append(sql)
-        out = self.answers.pop(0) if self.answers else ""
+        out = sqlcmd_output(self.answers.pop(0)) if self.answers else ""
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
 

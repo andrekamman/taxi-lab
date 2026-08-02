@@ -15,7 +15,18 @@ def settings_for(tmp_path):
     return from_env({"MSSQL_PASSWORD": "pw", "TAXI_DATA_DIR": str(tmp_path)})
 
 
+def sqlcmd_output(value, rows=1):
+    """What sqlcmd -h -1 -W really writes: the value, a blank line, and the
+    row-count trailer that -h -1 does not suppress. Feeding a bare token here is
+    what hid `scalar()` returning the string "NULL" straight into
+    datetime.fromisoformat."""
+    return f"{value}\n\n({rows} rows affected)\n"
+
+
 class Recorder:
+    """Answers scalar queries from a script of raw values, formatted the way
+    sqlcmd formats them, and records every statement."""
+
     def __init__(self, answers):
         self.answers = list(answers)
         self.statements = []
@@ -23,7 +34,7 @@ class Recorder:
     def __call__(self, cmd, env, stdin_text):
         if "-Q" in cmd:
             self.statements.append(cmd[cmd.index("-Q") + 1])
-        out = self.answers.pop(0) if self.answers else ""
+        out = sqlcmd_output(self.answers.pop(0)) if self.answers else ""
         return subprocess.CompletedProcess(cmd, 0, out, "")
 
 
@@ -94,7 +105,11 @@ def test_max_loaded_at_parses_iso_as_utc(tmp_path):
 
 def test_max_loaded_at_is_none_when_the_manifest_table_is_missing(tmp_path):
     """The query itself guards on OBJECT_ID and returns SQL NULL, which
-    mssql.scalar maps to None -- no error, no string-matching required."""
+    mssql.scalar maps to None -- no error, no string-matching required.
+
+    The runner emits what sqlcmd emits, trailer and all: reading only the first
+    line of "NULL\\n\\n(1 rows affected)" yields the *string* "NULL", which is
+    truthy and reaches datetime.fromisoformat as an untyped ValueError."""
     assert backup.max_loaded_at(settings_for(tmp_path), runner=Recorder(["NULL"])) is None
 
 
@@ -132,7 +147,8 @@ def _failing_backup_runner(settings, bad_bak_at, name="bad.bak"):
             make_bak(settings, bad_bak_at, name)
             return subprocess.CompletedProcess(
                 cmd, 1, "", "Msg 3013: VERIFY DATABASE is terminating abnormally.")
-        return subprocess.CompletedProcess(cmd, 0, "2026-08-01T12:00:00.000", "")
+        return subprocess.CompletedProcess(
+            cmd, 0, sqlcmd_output("2026-08-01T12:00:00.000"), "")
     return runner
 
 
@@ -161,6 +177,16 @@ def test_a_failed_verify_with_no_previous_backup_leaves_nothing(tmp_path):
         backup.run(s, runner=runner)
 
     assert list(s.backup_dir.rglob("*.bak")) == []
+
+
+def test_run_backs_up_an_empty_database_with_no_manifest(tmp_path):
+    """The spec's supported first-run state: no _load_manifest, no .bak. The
+    NULL scalar must not escape as an untyped ValueError from fromisoformat."""
+    s = settings_for(tmp_path)
+    rec = Recorder(["NULL"])
+
+    assert backup.run(s, runner=rec) is True
+    assert "DatabaseBackup" in "\n".join(rec.statements)
 
 
 def test_run_skips_when_current(tmp_path):
