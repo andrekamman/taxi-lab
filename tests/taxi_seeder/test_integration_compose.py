@@ -3,22 +3,19 @@
 Run:  uv run pytest -m integration -v
 Skip: uv run pytest -m 'not integration'
 
-NEVER EXECUTED. These tests have not been run, not even once, and cannot pass
-yet. Two independent blockers, neither fixable from this repo:
+These have now been run for real against a live Docker daemon, and the seeder
+produced a complete deliverable set: raw parquet, normalized parquet, presized
+mdf/ldf, and a compressed, Ola-verified backup at
+mssql/backup/taxi-sql/taxi/FULL/. The second run was a near no-op producing no
+new backup, which is the resumability premise this file exists to prove.
 
-1. test_loaded_tables_are_page_compressed asserts PAGE compression on the
-   loaded tables. That requires taxi-seed's generate_create_table_sql to emit
-   WITH (DATA_COMPRESSION = PAGE), plus a PyPI release. That is owned by the
-   taxi-seed maintainer and has not shipped.
-2. taxi-seed 0.1.0 -- the only release on PyPI, and what the seeder image
-   installs -- has a broken downloader: the mirror stage fails with
-   "download_taxi_data.sh: No such file or directory". The pipeline cannot
-   complete end-to-end regardless of compression until that is fixed
-   upstream.
+Requires taxi-seed >= 0.2.0 (page-compressed DDL) and duckdb pinned to the
+version whose community mssql extension taxi-seed asserts -- see the comments
+on both in pyproject.toml. The pipeline cannot complete without either.
 
-Do not treat a green run of this file as verification until both blockers
-are resolved and someone has actually run `uv run pytest -m integration -v`
-against a live Docker daemon.
+Running these is not free: a first run pulls the SQL Server image, builds the
+seeder image, and downloads a month of taxi data, so budget several minutes and
+a few GB.
 
 Disk cleanup is manual. `down -v` removes containers (there is no named volume
 to go with them -- `/var/opt/mssql` is deliberately left unpersisted, see
@@ -39,6 +36,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
+
+from taxi_seeder import mssql
 
 pytestmark = pytest.mark.integration
 
@@ -119,7 +118,12 @@ def sqlcmd(data_dir, query):
         "CREATE DATABASE [taxi] ON (FILENAME = N'/data/mssql/data/taxi.mdf'), "
         "(FILENAME = N'/data/mssql/log/taxi_log.ldf') FOR ATTACH"
     ))
-    return _raw_sqlcmd(data_dir, query).stdout.strip()
+    # first_value, not .strip(): sqlcmd appends "(1 rows affected)" to stdout,
+    # so a naive strip returns "SIMPLE\n\n(1 rows affected)" and every equality
+    # assertion fails on output that is actually correct. This is the same
+    # detail that broke mssql.scalar in production; reuse that parser rather
+    # than re-derive it here and get it wrong a second time.
+    return mssql.first_value(_raw_sqlcmd(data_dir, query).stdout)
 
 
 @pytest.fixture(scope="module")
