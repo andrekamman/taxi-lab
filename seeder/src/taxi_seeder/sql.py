@@ -93,21 +93,34 @@ def prepare_maintenance_solution(text: str, backup_directory: str) -> str:
     absent, which is how an upstream reformat surfaces instead of silently
     creating SQL Agent jobs that cannot run in the container.
     """
-    jobs = re.compile(r"SET @CreateJobs\s*=\s*'[YN]'")
-    directory = re.compile(r"SET @BackupDirectory\s*=\s*(?:NULL|N'(?:[^']|'')*')")
+    # The real MaintenanceSolution.sql declares these as
+    #   DECLARE @CreateJobs nvarchar(max)      = 'Y'   -- trailing comment
+    # not "SET @X = ...". The prefix is captured so the substitution replaces
+    # only the value and leaves the alignment and trailing comment intact.
+    # The quote-aware N'(?:[^']|'')*' keeps re-application idempotent, and
+    # requiring the "= <value>" suffix skips the second, valueless
+    # `DECLARE @BackupDirectory nvarchar(max)` inside a procedure body.
+    jobs = re.compile(r"(DECLARE @CreateJobs nvarchar\(max\)\s*=\s*)'[YN]'")
+    directory = re.compile(
+        r"(DECLARE @BackupDirectory nvarchar\(max\)\s*=\s*)(?:NULL|N'(?:[^']|'')*')"
+    )
 
     if not jobs.search(text):
         raise SqlIdentifierError(
-            "vendored MaintenanceSolution.sql has no 'SET @CreateJobs' line; "
+            "vendored MaintenanceSolution.sql has no "
+            "'DECLARE @CreateJobs nvarchar(max) = ...' line; "
             "re-vendor and re-check the patch markers"
         )
     if not directory.search(text):
         raise SqlIdentifierError(
-            "vendored MaintenanceSolution.sql has no 'SET @BackupDirectory' line; "
+            "vendored MaintenanceSolution.sql has no "
+            "'DECLARE @BackupDirectory nvarchar(max) = ...' line; "
             "re-vendor and re-check the patch markers"
         )
 
-    text = jobs.sub("SET @CreateJobs = 'N'", text, count=1)
+    # Lambdas rather than template strings: a replacement containing a
+    # backslash would otherwise be interpreted as a group reference.
+    text = jobs.sub(lambda m: m.group(1) + "'N'", text, count=1)
     return directory.sub(
-        f"SET @BackupDirectory = N'{_lit(str(backup_directory))}'", text, count=1
+        lambda m: m.group(1) + f"N'{_lit(str(backup_directory))}'", text, count=1
     )

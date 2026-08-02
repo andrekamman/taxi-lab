@@ -83,20 +83,42 @@ def test_paths_with_quotes_are_escaped():
 
 def test_prepare_maintenance_solution_disables_jobs_and_sets_directory():
     original = (
-        "SET @CreateJobs = 'Y'\n"
-        "SET @BackupDirectory = NULL\n"
-        "SET @OutputFileDirectory = NULL\n"
+        "DECLARE @CreateJobs nvarchar(max)          = 'Y'   -- create jobs\n"
+        "DECLARE @BackupDirectory nvarchar(max)     = NULL  -- backup root\n"
+        "DECLARE @OutputFileDirectory nvarchar(max) = NULL\n"
     )
     out = sql.prepare_maintenance_solution(original, "/data/mssql/backup")
-    assert "SET @CreateJobs = 'N'" in out
-    assert "SET @CreateJobs = 'Y'" not in out
-    assert "SET @BackupDirectory = N'/data/mssql/backup'" in out
+    assert "= 'N'" in out
+    assert "= 'Y'" not in out
+    assert "= N'/data/mssql/backup'" in out
+    # alignment and trailing comments survive
+    assert "-- create jobs" in out
+    assert "-- backup root" in out
 
 
 def test_prepare_maintenance_solution_is_idempotent():
-    original = "SET @CreateJobs = 'Y'\nSET @BackupDirectory = NULL\n"
+    original = ("DECLARE @CreateJobs nvarchar(max) = 'Y'\n"
+                "DECLARE @BackupDirectory nvarchar(max) = NULL\n")
     once = sql.prepare_maintenance_solution(original, "/b")
     assert sql.prepare_maintenance_solution(once, "/b") == once
+
+
+def test_prepare_maintenance_solution_ignores_the_valueless_redeclaration():
+    """Regression: a second `DECLARE @BackupDirectory nvarchar(max)` (no
+    `= value`) appears inside a stored-procedure body further down the real
+    script. Requiring the "= <value>" suffix must skip it -- a careless
+    pattern without that requirement risks patching the wrong occurrence."""
+    original = (
+        "DECLARE @CreateJobs nvarchar(max) = 'Y'\n"
+        "DECLARE @BackupDirectory nvarchar(max) = NULL\n"
+        "...\n"
+        "DECLARE @BackupDirectory nvarchar(max)\n"
+        "SELECT @BackupDirectory = Value FROM #Config WHERE [Name] = 'BackupDirectory'\n"
+    )
+    out = sql.prepare_maintenance_solution(original, "/data/mssql/backup")
+    assert "DECLARE @BackupDirectory nvarchar(max) = N'/data/mssql/backup'" in out
+    # the valueless redeclaration is untouched
+    assert "DECLARE @BackupDirectory nvarchar(max)\n" in out
 
 
 def test_prepare_maintenance_solution_fails_loudly_if_markers_missing():
@@ -109,8 +131,8 @@ def test_prepare_maintenance_solution_fails_loudly_if_markers_missing():
 def test_prepare_maintenance_solution_is_idempotent_with_quotes_in_directory():
     """Regression test: idempotency with escaped quotes in directory path."""
     original = (
-        "SET @CreateJobs = 'Y'\n"
-        "SET @BackupDirectory = NULL\n"
+        "DECLARE @CreateJobs nvarchar(max) = 'Y'\n"
+        "DECLARE @BackupDirectory nvarchar(max) = NULL\n"
     )
     once = sql.prepare_maintenance_solution(original, "/data/o'brien/backup")
     twice = sql.prepare_maintenance_solution(once, "/data/o'brien/backup")
