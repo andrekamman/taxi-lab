@@ -653,18 +653,22 @@ def test_paths_with_quotes_are_escaped():
 
 def test_prepare_maintenance_solution_disables_jobs_and_sets_directory():
     original = (
-        "SET @CreateJobs = 'Y'\n"
-        "SET @BackupDirectory = NULL\n"
-        "SET @OutputFileDirectory = NULL\n"
+        "DECLARE @CreateJobs nvarchar(max)          = 'Y'   -- create jobs\n"
+        "DECLARE @BackupDirectory nvarchar(max)     = NULL  -- backup root\n"
+        "DECLARE @OutputFileDirectory nvarchar(max) = NULL\n"
     )
     out = sql.prepare_maintenance_solution(original, "/data/mssql/backup")
-    assert "SET @CreateJobs = 'N'" in out
-    assert "SET @CreateJobs = 'Y'" not in out
-    assert "SET @BackupDirectory = N'/data/mssql/backup'" in out
+    assert "= 'N'" in out
+    assert "= 'Y'" not in out
+    assert "= N'/data/mssql/backup'" in out
+    # alignment and trailing comments survive
+    assert "-- create jobs" in out
+    assert "-- backup root" in out
 
 
 def test_prepare_maintenance_solution_is_idempotent():
-    original = "SET @CreateJobs = 'Y'\nSET @BackupDirectory = NULL\n"
+    original = ("DECLARE @CreateJobs nvarchar(max) = 'Y'\n"
+                "DECLARE @BackupDirectory nvarchar(max) = NULL\n")
     once = sql.prepare_maintenance_solution(original, "/b")
     assert sql.prepare_maintenance_solution(once, "/b") == once
 
@@ -779,23 +783,36 @@ def prepare_maintenance_solution(text: str, backup_directory: str) -> str:
     absent, which is how an upstream reformat surfaces instead of silently
     creating SQL Agent jobs that cannot run in the container.
     """
-    jobs = re.compile(r"SET @CreateJobs\s*=\s*'[YN]'")
-    directory = re.compile(r"SET @BackupDirectory\s*=\s*(?:NULL|N'[^']*')")
+    # The real MaintenanceSolution.sql declares these as
+    #   DECLARE @CreateJobs nvarchar(max)      = 'Y'   -- trailing comment
+    # not "SET @X = ...". The prefix is captured so the substitution replaces
+    # only the value and leaves the alignment and trailing comment intact.
+    # The quote-aware N'(?:[^']|'')*' keeps re-application idempotent, and
+    # requiring the "= <value>" suffix skips the second, valueless
+    # `DECLARE @BackupDirectory nvarchar(max)` inside a procedure body.
+    jobs = re.compile(r"(DECLARE @CreateJobs nvarchar\(max\)\s*=\s*)'[YN]'")
+    directory = re.compile(
+        r"(DECLARE @BackupDirectory nvarchar\(max\)\s*=\s*)(?:NULL|N'(?:[^']|'')*')"
+    )
 
     if not jobs.search(text):
         raise SqlIdentifierError(
-            "vendored MaintenanceSolution.sql has no 'SET @CreateJobs' line; "
+            "vendored MaintenanceSolution.sql has no "
+            "'DECLARE @CreateJobs nvarchar(max) = ...' line; "
             "re-vendor and re-check the patch markers"
         )
     if not directory.search(text):
         raise SqlIdentifierError(
-            "vendored MaintenanceSolution.sql has no 'SET @BackupDirectory' line; "
+            "vendored MaintenanceSolution.sql has no "
+            "'DECLARE @BackupDirectory nvarchar(max) = ...' line; "
             "re-vendor and re-check the patch markers"
         )
 
-    text = jobs.sub("SET @CreateJobs = 'N'", text, count=1)
+    # Lambdas rather than template strings: a replacement containing a
+    # backslash would otherwise be interpreted as a group reference.
+    text = jobs.sub(lambda m: m.group(1) + "'N'", text, count=1)
     return directory.sub(
-        f"SET @BackupDirectory = N'{_lit(str(backup_directory))}'", text, count=1
+        lambda m: m.group(1) + f"N'{_lit(str(backup_directory))}'", text, count=1
     )
 ```
 
@@ -1433,8 +1450,8 @@ git commit -m "feat(seeder): presized provisioning with autogrowth warning"
 mkdir -p seeder/sql
 curl -fsSL -o seeder/sql/MaintenanceSolution.sql \
   https://raw.githubusercontent.com/olahallengren/sql-server-maintenance-solution/20260723_232218/MaintenanceSolution.sql
-grep -c "SET @CreateJobs" seeder/sql/MaintenanceSolution.sql   # expect 1
-grep -c "SET @BackupDirectory" seeder/sql/MaintenanceSolution.sql  # expect 1
+grep -c "DECLARE @CreateJobs nvarchar" seeder/sql/MaintenanceSolution.sql   # expect 1
+grep -cE "DECLARE @BackupDirectory nvarchar\(max\)\s*=" seeder/sql/MaintenanceSolution.sql  # expect 1
 printf '20260723_232218\n' > seeder/sql/VERSION
 ```
 
@@ -1490,7 +1507,8 @@ class Recorder:
 
 def vendored(tmp_path):
     p = tmp_path / "MaintenanceSolution.sql"
-    p.write_text("SET @CreateJobs = 'Y'\nSET @BackupDirectory = NULL\nGO\n")
+    p.write_text("DECLARE @CreateJobs nvarchar(max) = 'Y'\n"
+                 "DECLARE @BackupDirectory nvarchar(max) = NULL\nGO\n")
     return p
 
 
@@ -1507,8 +1525,11 @@ def test_installs_a_patched_copy_when_absent(tmp_path):
 
     assert installed is True
     assert len(rec.file_contents) == 1
-    assert "SET @CreateJobs = 'N'" in rec.file_contents[0]
-    assert "SET @BackupDirectory = N'/data/mssql/backup'" in rec.file_contents[0]
+    assert "DECLARE @CreateJobs nvarchar(max) = 'N'" in rec.file_contents[0]
+    assert (
+        "DECLARE @BackupDirectory nvarchar(max) = N'/data/mssql/backup'"
+        in rec.file_contents[0]
+    )
 
 
 def test_the_vendored_file_is_left_untouched(tmp_path):
