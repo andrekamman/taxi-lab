@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from taxi_seeder.sql import SqlIdentifierError, validate_identifier
+
 DATA_TYPES = ("yellow", "green", "fhv", "fhvhv")
 
 
@@ -63,6 +65,22 @@ def _int(env: Mapping[str, str], key: str, default: int) -> int:
         raise ConfigError(f"{key} must be an integer, got {raw!r}") from e
 
 
+def _identifier(env: Mapping[str, str], key: str, default: str) -> str:
+    """A setting that ends up as a T-SQL identifier, validated here.
+
+    Deferring this to the SQL builders means a name like `taxi-db` -- legal in
+    SQL Server, rejected by sql._IDENT_RE -- passes preflight, runs the mirror
+    stage for hours, and only then dies in provision. And it would die as a
+    SqlIdentifierError, which cli.main's config block does not catch. Fail at
+    config time, as a ConfigError, before anything has been done.
+    """
+    value = (env.get(key) or "").strip() or default
+    try:
+        return validate_identifier(value, key)
+    except SqlIdentifierError as e:
+        raise ConfigError(f"{e} (it is used as a T-SQL identifier)") from e
+
+
 def _types(raw: str) -> tuple[str, ...]:
     wanted = [t.strip() for t in raw.split(",") if t.strip()]
     unknown = [t for t in wanted if t not in DATA_TYPES]
@@ -109,9 +127,12 @@ def from_env(env: Mapping[str, str]) -> Settings:
         password=password,
         host=env.get("MSSQL_HOST") or "mssql",
         port=_int(env, "MSSQL_PORT", 1433),
-        database=env.get("MSSQL_DATABASE") or "taxi",
-        schema=env.get("MSSQL_SCHEMA") or "dbo",
-        user=env.get("MSSQL_USER") or "sa",
+        database=_identifier(env, "MSSQL_DATABASE", "taxi"),
+        schema=_identifier(env, "MSSQL_SCHEMA", "dbo"),
+        # Not validated as an identifier: the login only ever reaches sqlcmd's
+        # -U and taxi-load's --user, never a SQL string, and real logins may
+        # contain characters _IDENT_RE rejects.
+        user=(env.get("MSSQL_USER") or "").strip() or "sa",
         data_factor=factor,
         data_size_gb=data_size_gb,
         log_size_gb=_int(env, "MSSQL_LOG_SIZE_GB", 16),

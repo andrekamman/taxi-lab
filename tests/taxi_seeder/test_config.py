@@ -55,6 +55,27 @@ def test_explicit_data_size_overrides_estimate():
     assert from_env({**BASE, "MSSQL_DATA_SIZE_GB": "500"}).data_size_gb == 500
 
 
+def test_database_name_is_validated_at_config_time():
+    """`taxi-db` is legal in SQL Server but not a plain identifier. Unvalidated
+    it passes preflight, mirrors for hours, and only then dies in provision --
+    as a SqlIdentifierError, which cli.main's config block does not catch."""
+    with pytest.raises(ConfigError, match="MSSQL_DATABASE"):
+        from_env({**BASE, "MSSQL_DATABASE": "taxi-db"})
+
+
+def test_schema_name_is_validated_at_config_time():
+    with pytest.raises(ConfigError, match="MSSQL_SCHEMA"):
+        from_env({**BASE, "MSSQL_SCHEMA": "dbo; DROP DATABASE taxi--"})
+
+
+def test_connection_overrides_are_honoured():
+    s = from_env({**BASE, "MSSQL_HOST": "db.internal", "MSSQL_PORT": "14330",
+                  "MSSQL_DATABASE": "taxi_2026", "MSSQL_SCHEMA": "staging",
+                  "MSSQL_USER": "loader"})
+    assert (s.host, s.port) == ("db.internal", 14330)
+    assert (s.database, s.schema, s.user) == ("taxi_2026", "staging", "loader")
+
+
 def test_derived_paths():
     s = from_env(BASE)
     assert s.raw_normalized_dir == Path("/data/raw-normalized")

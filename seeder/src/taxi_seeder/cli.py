@@ -40,6 +40,13 @@ environment variables:
                         consulted at database creation
   MSSQL_LOG_SIZE_GB     ldf size in GB (default: 16)
   MSSQL_FILEGROWTH_MB   data/log filegrowth in MB (default: 1024)
+  MSSQL_HOST            SQL Server host (default: mssql, the compose service)
+  MSSQL_PORT            SQL Server port (default: 1433)
+  MSSQL_DATABASE        database to create and load (default: taxi); must be a
+                        plain identifier -- it is interpolated into T-SQL
+  MSSQL_SCHEMA          schema holding the loaded tables (default: dbo); same
+                        identifier rule
+  MSSQL_USER            SQL login (default: sa)
 """
 
 

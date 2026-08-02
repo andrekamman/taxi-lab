@@ -123,6 +123,19 @@ creation would fail noisily and pointlessly.
 | `MSSQL_DATA_SIZE_GB` | unset | Explicit mdf size; bypasses the estimate entirely. |
 | `MSSQL_LOG_SIZE_GB` | `16` | Explicit ldf size. |
 | `MSSQL_FILEGROWTH_MB` | `1024` | Autogrowth increment for both files. |
+| `MSSQL_HOST` | `mssql` | SQL Server host; the Compose service name. |
+| `MSSQL_PORT` | `1433` | SQL Server port. |
+| `MSSQL_DATABASE` | `taxi` | Database to create and load. |
+| `MSSQL_SCHEMA` | `dbo` | Schema holding the loaded tables. |
+| `MSSQL_USER` | `sa` | SQL login. |
+
+`MSSQL_DATABASE` and `MSSQL_SCHEMA` are interpolated into T-SQL, so they are
+validated as plain identifiers (`[A-Za-z_][A-Za-z0-9_]*`) in `config.from_env`,
+at startup. `taxi-db` is legal in SQL Server and rejected here; the alternative
+is a run that mirrors for hours and then fails in provisioning. `MSSQL_USER` is
+not validated that way — it only ever reaches `sqlcmd -U` and `taxi-load
+--user`, never a SQL string, and real logins may contain characters that pattern
+rejects.
 
 There is deliberately no year-range variable. `taxi-download` exposes only
 `data_type`, `--recent N`, and `--data-dir` — no year filter exists upstream,

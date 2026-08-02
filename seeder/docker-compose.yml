@@ -55,6 +55,15 @@ services:
       MSSQL_DATA_SIZE_GB: ${MSSQL_DATA_SIZE_GB:-}
       MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-16}
       MSSQL_FILEGROWTH_MB: ${MSSQL_FILEGROWTH_MB:-1024}
+      # Every remaining variable config.from_env reads. Listed even where the
+      # default is the only sane value in this stack: a variable documented in
+      # .env.example that never reaches the container is worse than an
+      # undocumented one.
+      MSSQL_HOST: ${MSSQL_HOST:-mssql}
+      MSSQL_PORT: ${MSSQL_PORT:-1433}
+      MSSQL_DATABASE: ${MSSQL_DATABASE:-taxi}
+      MSSQL_SCHEMA: ${MSSQL_SCHEMA:-dbo}
+      MSSQL_USER: ${MSSQL_USER:-sa}
     volumes:
       - ${TAXI_DATA_DIR}:/data
     working_dir: /data

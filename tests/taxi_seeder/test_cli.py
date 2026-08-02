@@ -27,6 +27,20 @@ def test_unknown_flag_exits_2_without_touching_pipeline(monkeypatch, capsys):
     assert "usage: taxi-seeder" in err
 
 
+def test_help_documents_every_variable_the_config_reads(capsys):
+    """An undocumented variable that silently changes what gets created is a
+    trap; MSSQL_DATABASE in particular decides what the run builds."""
+    with pytest.raises(SystemExit):
+        cli.main(["--help"])
+
+    out = capsys.readouterr().out
+    for var in ("TAXI_DATA_DIR", "MSSQL_PASSWORD", "TAXI_TYPES", "TAXI_RECENT",
+                "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB", "MSSQL_LOG_SIZE_GB",
+                "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT",
+                "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER"):
+        assert var in out
+
+
 def test_worst_prefers_failure():
     assert cli.worst([0, 1, 2]) == 2
 

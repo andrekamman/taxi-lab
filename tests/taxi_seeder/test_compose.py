@@ -38,6 +38,21 @@ def test_system_databases_live_on_a_named_volume(compose):
     assert volume_name in (compose.get("volumes") or {})
 
 
+# Every variable config.from_env reads. A variable the CLI honours but Compose
+# never forwards is silently ignored inside the container.
+SEEDER_ENV_VARS = (
+    "TAXI_DATA_DIR", "MSSQL_PASSWORD", "TAXI_TYPES", "TAXI_RECENT",
+    "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB", "MSSQL_LOG_SIZE_GB",
+    "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT", "MSSQL_DATABASE",
+    "MSSQL_SCHEMA", "MSSQL_USER",
+)
+
+
+@pytest.mark.parametrize("var", SEEDER_ENV_VARS)
+def test_compose_forwards_every_configuration_variable(compose, var):
+    assert var in compose["services"]["seeder"]["environment"]
+
+
 def test_the_seeder_runs_once_and_does_not_restart(compose):
     assert compose["services"]["seeder"]["restart"] == "no"
 
