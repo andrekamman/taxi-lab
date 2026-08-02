@@ -19,6 +19,19 @@ yet. Two independent blockers, neither fixable from this repo:
 Do not treat a green run of this file as verification until both blockers
 are resolved and someone has actually run `uv run pytest -m integration -v`
 against a live Docker daemon.
+
+Disk cleanup is manual. `down -v` removes containers and compose-declared
+volumes, but this stack declares none -- both services bind-mount the host
+`data_dir` directly -- so a full run leaves several GB of `raw/`,
+`raw-normalized/`, and `mssql/` data behind under pytest's temp tree
+(`tmp_path_factory.mktemp("taxi-integration")`, i.e. under
+`/tmp/pytest-of-$USER/pytest-<N>/taxi-integration0/` by default, or
+`$PYTEST_DEBUG_TEMPROOT`/`--basetemp` if set). Deliberately not auto-removed
+here: the mssql container runs as root inside the container and leaves
+root-owned files on the bind mount, so `rm -rf` from the test process would
+either fail or require privilege escalation, neither of which belongs in a
+test. Clean it up by hand, e.g.
+`sudo rm -rf /tmp/pytest-of-$USER/pytest-*/taxi-integration*`.
 """
 import os
 import subprocess
@@ -32,7 +45,13 @@ COMPOSE_DIR = Path(__file__).resolve().parents[2] / "seeder"
 PASSWORD = "Integration-Str0ng!"
 
 
-def compose(*args, data_dir, check=True):
+# Default timeout for short commands (exec, down). The long-running "up" calls
+# pass their own, larger timeout explicitly -- image build, SQL Server startup,
+# and the data download can legitimately take several minutes.
+DEFAULT_TIMEOUT = 120
+
+
+def compose(*args, data_dir, check=True, timeout=DEFAULT_TIMEOUT):
     env = {
         **os.environ,
         "TAXI_DATA_DIR": str(data_dir),
@@ -40,10 +59,20 @@ def compose(*args, data_dir, check=True):
         "TAXI_TYPES": "yellow",
         "TAXI_RECENT": "1",
     }
-    return subprocess.run(
-        ["docker", "compose", *args], cwd=COMPOSE_DIR, env=env,
-        capture_output=True, text=True, check=check,
-    )
+    try:
+        return subprocess.run(
+            ["docker", "compose", *args], cwd=COMPOSE_DIR, env=env,
+            capture_output=True, text=True, check=check, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Without this, a stalled download or an mssql container that never
+        # reports healthy (see the healthcheck retries/interval in
+        # docker-compose.yml) hangs the test process indefinitely -- the
+        # module-scoped fixture's teardown only runs once the test returns.
+        pytest.fail(
+            f"`docker compose {' '.join(args)}` timed out after {timeout}s.\n"
+            f"stdout so far: {exc.stdout}\nstderr so far: {exc.stderr}"
+        )
 
 
 def sqlcmd(data_dir, query):
@@ -65,7 +94,8 @@ def data_dir(tmp_path_factory):
 
 def test_first_run_produces_the_full_deliverable_set(data_dir):
     result = compose("up", "--build", "--abort-on-container-exit",
-                     "--exit-code-from", "seeder", data_dir=data_dir, check=False)
+                     "--exit-code-from", "seeder", data_dir=data_dir, check=False,
+                     timeout=1800)
     assert result.returncode == 0, result.stdout + result.stderr
 
     assert list((data_dir / "raw" / "yellow").rglob("*.parquet"))
@@ -100,7 +130,8 @@ def test_second_run_is_a_near_noop(data_dir):
               for p in (data_dir / "mssql" / "backup").rglob("*.bak")}
 
     result = compose("up", "--abort-on-container-exit",
-                     "--exit-code-from", "seeder", data_dir=data_dir, check=False)
+                     "--exit-code-from", "seeder", data_dir=data_dir, check=False,
+                     timeout=1800)
     assert result.returncode == 0, result.stdout + result.stderr
 
     after = {p: p.stat().st_mtime

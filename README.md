@@ -57,10 +57,23 @@ Once a taxi-seed release drops `k6_loadtest`, delete the `[tool.uv.sources]` blo
 uv run pytest
 ```
 
-The k6 preprocessor tests are self-contained — they use a small checked-in parquet fixture
-and never touch a database or the network. The generated K6 test bundle is *not* executed
-by the suite; running it needs the custom xk6 binary from
-[`k6-loadtest/build_k6.sh`](k6-loadtest/build_k6.sh) and a reachable SQL Server.
+This runs the fast unit suite only (Docker not required) — the `integration` marker is
+deselected by default via `addopts` in `pyproject.toml`. The k6 preprocessor tests are
+self-contained — they use a small checked-in parquet fixture and never touch a database
+or the network. The generated K6 test bundle is *not* executed by the suite; running it
+needs the custom xk6 binary from [`k6-loadtest/build_k6.sh`](k6-loadtest/build_k6.sh) and
+a reachable SQL Server.
+
+The seeder's end-to-end test runs the real Compose stack twice against one data folder to
+prove resumability. It needs Docker and is opt-in:
+
+```bash
+uv run pytest -m integration -v
+```
+
+Currently blocked: it cannot pass yet, because taxi-seed hasn't shipped PAGE compression
+and the only PyPI release (`0.1.0`) has a broken downloader. See the module docstring in
+[`tests/taxi_seeder/test_integration_compose.py`](tests/taxi_seeder/test_integration_compose.py).
 
 ## Docs
 
