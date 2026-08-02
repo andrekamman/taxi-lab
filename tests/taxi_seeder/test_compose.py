@@ -40,3 +40,17 @@ def test_system_databases_live_on_a_named_volume(compose):
 
 def test_the_seeder_runs_once_and_does_not_restart(compose):
     assert compose["services"]["seeder"]["restart"] == "no"
+
+
+def test_the_readme_documents_an_invocation_that_returns_the_seeders_exit_code():
+    """`docker compose up` alone never returns -- the mssql service runs
+    indefinitely -- so the whole 0/1/2 contract is invisible to anyone following
+    the README. The integration test already uses the flags that fix that."""
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text()
+    for line in readme.splitlines():
+        if line.strip().startswith("docker compose up"):
+            assert "--abort-on-container-exit" in line
+            assert "--exit-code-from seeder" in line
+            break
+    else:
+        pytest.fail("README documents no `docker compose up` invocation")

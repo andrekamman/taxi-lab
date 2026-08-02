@@ -21,8 +21,14 @@ PyPI. Anything that *uses* the resulting data set lives in this repo.
 
   ```bash
   cd seeder && cp .env.example .env   # set TAXI_DATA_DIR and MSSQL_PASSWORD
-  docker compose up --build
+  docker compose up --build --abort-on-container-exit --exit-code-from seeder
   ```
+
+  Both flags are load-bearing. The `mssql` service runs indefinitely, so a plain
+  `docker compose up` never returns: the seeder finishes, and you are left tailing SQL
+  Server's log with no signal that the run ended and no way to see its exit code. With
+  these flags the stack stops when the seeder exits and `$?` is the seeder's own
+  `0` clean / `1` needs-review / `2` operational failure.
 
 ## Install
 
