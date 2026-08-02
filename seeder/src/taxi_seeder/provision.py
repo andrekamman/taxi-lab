@@ -84,6 +84,18 @@ def run(settings: Settings, *, runner=None) -> bool:
         f"provision: creating {settings.database!r} with "
         f"{data_mb / 1024:.0f} GB data + {log_mb / 1024:.0f} GB log"
     )
+    # Whether SQL Server on Linux gets instant file initialization depends on the
+    # host filesystem and is still unconfirmed (see the spec's open risk). If it
+    # does not, both files are zero-filled inside this one statement, which then
+    # produces no output for a long time. Say so before it happens, so a silent
+    # terminal is not mistaken for a hang.
+    print(
+        f"provision: allocating {(data_mb + log_mb) / 1024:.0f} GB of files now. "
+        f"This is a single CREATE DATABASE with no progress output, and if the "
+        f"host filesystem does not support instant file initialization the files "
+        f"are zero-filled first -- on a large database that can take a long time. "
+        f"It is not hung."
+    )
     mssql.run(
         settings,
         sql.create_database(

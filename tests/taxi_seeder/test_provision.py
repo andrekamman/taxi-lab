@@ -57,6 +57,24 @@ def test_creates_a_presized_database_when_absent(tmp_path):
     assert "SET RECOVERY SIMPLE" in joined
 
 
+def test_creation_warns_that_the_allocation_may_run_silently_for_a_long_time(
+    tmp_path, capsys
+):
+    """Instant file initialization on SQL Server on Linux is unconfirmed (spec:
+    open risk, deferred to the first integration run). If the files are
+    zero-filled, CREATE DATABASE produces no output for a long time -- the user
+    needs a documented reason to believe it is not hung."""
+    s = settings_for(tmp_path, MSSQL_DATA_SIZE_GB="200")
+    rec = Recorder(["0"])
+
+    provision.run(s, runner=rec)
+
+    out = capsys.readouterr().out
+    assert "216 GB" in out            # 200 GB data + 16 GB log
+    assert "not hung" in out
+    assert "instant file initialization" in out
+
+
 def test_explicit_size_wins_over_the_estimate(tmp_path):
     s = settings_for(tmp_path, MSSQL_DATA_SIZE_GB="500")
     write_parquet(tmp_path, "yellow", 4 * GB)

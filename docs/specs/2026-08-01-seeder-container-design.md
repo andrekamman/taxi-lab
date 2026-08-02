@@ -298,10 +298,25 @@ first. On Windows this is instant file initialization via
 filesystem and is **not confirmed**. If files are zero-filled, first-run
 provisioning of a large mdf could take a very long time.
 
-Implementation must measure this early with a small file. If it is slow, fall
-back to a modest initial size plus 1 GB autogrowth, which surrenders some
-fragmentation benefit and nothing else. Log files are always zero-filled on
-every platform, which is a further argument for keeping the ldf at 16 GB.
+**This risk is knowingly deferred, not discharged.** Nothing in the branch
+measures it. Measuring it honestly needs a real SQL Server on a real host
+filesystem, which means the integration suite in
+`tests/taxi_seeder/test_integration_compose.py` — and that suite has never been
+executed, being blocked on a taxi-seed release (see its module docstring). The
+first real run of `uv run pytest -m integration` is what discharges this risk;
+until then the answer is unknown and is treated as unknown.
+
+What the implementation does in the meantime is refuse to be silent about it:
+`provision.run` prints the total size it is about to allocate and warns that the
+single `CREATE DATABASE` produces no output and may run for a long time if the
+files are zero-filled, so a user watching a still terminal knows it is not hung.
+There is no timeout on that `sqlcmd` call, deliberately — a timeout whose
+correct value is unknown would abort legitimate work.
+
+If that first integration run shows allocation is slow, the fallback stands: a
+modest initial size plus 1 GB autogrowth, which surrenders some fragmentation
+benefit and nothing else. Log files are always zero-filled on every platform,
+which is a further argument for keeping the ldf at 16 GB.
 
 ## Page compression
 
