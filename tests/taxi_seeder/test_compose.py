@@ -1,8 +1,9 @@
 """Invariants of the Compose stack that the Python tests cannot otherwise see.
 
-These are cheap YAML assertions, not a Docker run: they pin the two properties
-of docker-compose.yml that silently break the seeder's contracts -- the password
-never reaching argv, and SQL Server's system databases outliving `down`.
+These are cheap YAML assertions, not a Docker run: they pin the properties of
+docker-compose.yml that silently break the seeder's contracts -- the password
+never reaching argv, and `/var/opt/mssql` staying un-persisted so `master`
+resets on every start.
 """
 from pathlib import Path
 
@@ -27,15 +28,18 @@ def test_healthcheck_keeps_the_password_out_of_argv(compose):
     assert " -P" not in test
 
 
-def test_system_databases_live_on_a_named_volume(compose):
-    """master records where taxi.mdf is. If it dies with the container while the
-    mdf survives on the bind mount, the next run tries to CREATE over the file
-    and fails with Msg 5170 -- permanently."""
+def test_system_databases_are_not_persisted(compose):
+    """A named volume on /var/opt/mssql was tried and reverted: it kept master
+    around across restarts, which broke a moved TAXI_DATA_DIR (stale path in
+    the old master) and a rotated MSSQL_PASSWORD (SQL Server only consumes
+    MSSQL_SA_PASSWORD on first init of /var/opt/mssql, so a persisted master
+    means "first init" never happens again). Ephemeral master makes every
+    start a first init and pushes provision.py's FOR ATTACH branch onto the
+    normal warm-start path instead of only the `down -v` case -- exercised
+    every restart, not almost never. Do not reintroduce this volume."""
     mssql = compose["services"]["mssql"]
-    assert any(v.split(":")[1] == "/var/opt/mssql" for v in mssql["volumes"])
-    volume_name = next(v.split(":")[0] for v in mssql["volumes"]
-                       if v.split(":")[1] == "/var/opt/mssql")
-    assert volume_name in (compose.get("volumes") or {})
+    assert not any(v.split(":")[1] == "/var/opt/mssql" for v in mssql["volumes"])
+    assert not compose.get("volumes")
 
 
 # Every variable config.from_env reads. A variable the CLI honours but Compose

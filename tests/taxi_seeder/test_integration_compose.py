@@ -20,10 +20,11 @@ Do not treat a green run of this file as verification until both blockers
 are resolved and someone has actually run `uv run pytest -m integration -v`
 against a live Docker daemon.
 
-Disk cleanup is manual. `down -v` removes containers and the one compose-declared
-volume (`mssql-system`, holding SQL Server's system databases), but the data
-itself is a host bind mount of `data_dir`, so a full run leaves several GB of `raw/`,
-`raw-normalized/`, and `mssql/` data behind under pytest's temp tree
+Disk cleanup is manual. `down -v` removes containers (there is no named volume
+to go with them -- `/var/opt/mssql` is deliberately left unpersisted, see
+docker-compose.yml), but the data itself is a host bind mount of `data_dir`,
+so a full run leaves several GB of `raw/`, `raw-normalized/`, and `mssql/`
+data behind under pytest's temp tree
 (`tmp_path_factory.mktemp("taxi-integration")`, i.e. under
 `/tmp/pytest-of-$USER/pytest-<N>/taxi-integration0/` by default, or
 `$PYTEST_DEBUG_TEMPROOT`/`--basetemp` if set). Deliberately not auto-removed

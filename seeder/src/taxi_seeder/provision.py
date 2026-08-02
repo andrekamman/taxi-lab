@@ -40,11 +40,14 @@ def _attach(settings: Settings, runner) -> None:
 def run(settings: Settings, *, runner=None) -> bool:
     """Create or attach the database if absent. True when it did either.
 
-    The attach branch is the warm-start path: the mdf/ldf live on the bind mount
-    and survive `docker compose down`, but the system databases that record them
-    live in the container. Creating over an existing file fails with Msg 5170
-    and keeps failing on every subsequent run, so an orphaned mdf is attached,
-    not recreated.
+    The attach branch is the normal warm-start path, taken on every restart:
+    `/var/opt/mssql` is deliberately not persisted, so each container start
+    gets a fresh `master` with no memory of 'taxi', while the mdf/ldf live on
+    the bind mount and survive `docker compose down` regardless. Creating over
+    an existing file fails with Msg 5170 and keeps failing on every subsequent
+    run, so the orphaned mdf is attached, not recreated -- and this is also
+    what makes a moved TAXI_DATA_DIR and a rotated MSSQL_PASSWORD work, since
+    there is never a stale master to disagree with the new state.
     """
     exists = mssql.scalar(settings, sql.database_exists(settings.database),
                           database="master", runner=runner) == "1"
@@ -65,10 +68,13 @@ def run(settings: Settings, *, runner=None) -> bool:
                 f"re-presize: run DROP DATABASE [{settings.database}], then delete "
                 f"{settings.mdf_path} and {settings.ldf_path}, then re-run to "
                 f"re-presize and reload from parquet.\n"
-                f"           Deleting the files first is not enough -- the server "
-                f"still has {settings.database!r} registered, so the next run skips "
-                f"provisioning and then fails reading the file sizes of a database "
-                f"it cannot open."
+                f"           Deleting the files first is not enough within this "
+                f"server's current lifetime -- master still has "
+                f"{settings.database!r} registered, so the next run before a "
+                f"restart skips provisioning and then fails reading the file "
+                f"sizes of a database it cannot open. Restarting mssql resets "
+                f"master and would let a later run recreate cleanly, but do not "
+                f"rely on that -- DROP DATABASE first, always."
             )
         else:
             print(f"provision: database {settings.database!r} exists, skipping")

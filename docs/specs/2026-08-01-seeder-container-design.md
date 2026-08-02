@@ -44,8 +44,8 @@ services:
             hostname: taxi-sql            # pins @@SERVERNAME
             user: root                    # bind-mount friendliness
             environment: ACCEPT_EULA, MSSQL_SA_PASSWORD, MSSQL_PID=Developer
-            volumes: mssql-system:/var/opt/mssql   # master/msdb survive `down`
-                     ${TAXI_DATA_DIR}:/data
+            volumes: ${TAXI_DATA_DIR}:/data         # no volume on /var/opt/mssql --
+                                                     # master is deliberately ephemeral
             healthcheck: sqlcmd -Q "SELECT 1"      # password via SQLCMDPASSWORD
 
   seeder:   build: ./seeder
@@ -255,13 +255,15 @@ ALTER DATABASE [taxi] SET RECOVERY SIMPLE;
 
 The mdf/ldf are deliverables in their own right, and they live on the bind mount
 — but the system databases that *record* them (`master`, `msdb`) live in
-`/var/opt/mssql`. Two things follow, and both are handled:
+`/var/opt/mssql`, inside the container. There is deliberately no volume there:
+`master` is left to reset on every container start, and provisioning's attach
+branch is what keeps the user database safe across that reset — not
+persistence. A named volume was tried and reverted; see below.
 
-- `/var/opt/mssql` is a named Compose volume, so a plain `docker compose down`
-  no longer discards `master` while the user database's files survive.
-- When `DB_ID('taxi') IS NULL` but `mssql/data/taxi.mdf` exists on disk anyway
-  (`down -v`, a moved data folder, a rebuilt server), provisioning attaches
-  rather than creates:
+Every start therefore begins with a fresh `master`, so `DB_ID('taxi')` is
+always NULL at the top of provisioning — there is no warm case where it is
+not. When the mdf already exists at `mssql/data/taxi.mdf` (the common case:
+any run after the first), provisioning attaches rather than creates:
 
 ```sql
 CREATE DATABASE [taxi]
@@ -270,10 +272,36 @@ CREATE DATABASE [taxi]
   FOR ATTACH;
 ```
 
-Without this, `CREATE DATABASE` fails with Msg 5170 ("cannot create file …
-because it already exists") — and keeps failing on every subsequent run, since
-nothing about the state changes. The only escape would be deleting the files and
-reloading from parquet.
+This makes attach the *normal* warm-start path, exercised on every restart —
+not a rare `down -v` edge case. Without it, `CREATE DATABASE` fails with Msg
+5170 ("cannot create file … because it already exists") and keeps failing on
+every subsequent run, since nothing about the state changes. The only escape
+would be deleting the files and reloading from parquet.
+
+**Why not persist `master` instead.** A named volume on `/var/opt/mssql` was
+the first fix tried, so `master` would survive `docker compose down` and the
+attach branch would only need to cover `down -v`. It was reverted because
+persisting `master` traded one bug for two:
+
+- **A moved `TAXI_DATA_DIR` broke.** A persisted `master` still records the
+  old path, so provisioning found `DB_ID('taxi')` non-NULL, took the skip
+  branch, and failed opaquely reading file sizes of a database it could not
+  open at the new path — *after* the mirror stage had already run, which on a
+  full dataset is hours of wasted work.
+- **A rotated `MSSQL_PASSWORD` silently never took effect.** SQL Server only
+  consumes `MSSQL_SA_PASSWORD` on first initialization of `/var/opt/mssql`.
+  With a persisted `master`, every start after the first is not a first
+  initialization, so a changed password left the old one live in the
+  persisted system databases and the healthcheck never cleared.
+
+With no volume, every start *is* a first initialization: a moved data
+directory is just an mdf the fresh `master` has never heard of and attaches,
+and a rotated password is always consumed. The one cost is that Ola's
+MaintenanceSolution reinstalls on every start rather than only the first —
+`ola.run` already guards on `OBJECT_ID('dbo.DatabaseBackup') IS NULL` and is
+idempotent, so this is a few seconds, not a real cost. `dbo._load_manifest` —
+the table resumability and backup-staleness both depend on — lives in the
+`taxi` database, not `master`, so it survives the attach untouched.
 
 SIMPLE recovery: this is a rebuildable seed database whose real source of truth
 is the parquet, so point-in-time recovery has no meaning. Bulk loads stay
