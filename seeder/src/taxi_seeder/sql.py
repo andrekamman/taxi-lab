@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IDENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 class SqlIdentifierError(Exception):
@@ -94,7 +94,7 @@ def prepare_maintenance_solution(text: str, backup_directory: str) -> str:
     creating SQL Agent jobs that cannot run in the container.
     """
     jobs = re.compile(r"SET @CreateJobs\s*=\s*'[YN]'")
-    directory = re.compile(r"SET @BackupDirectory\s*=\s*(?:NULL|N'[^']*')")
+    directory = re.compile(r"SET @BackupDirectory\s*=\s*(?:NULL|N'(?:[^']|'')*')")
 
     if not jobs.search(text):
         raise SqlIdentifierError(

@@ -102,3 +102,46 @@ def test_prepare_maintenance_solution_is_idempotent():
 def test_prepare_maintenance_solution_fails_loudly_if_markers_missing():
     with pytest.raises(sql.SqlIdentifierError, match="CreateJobs"):
         sql.prepare_maintenance_solution("-- nothing here\n", "/b")
+
+
+# Regression tests for bugs found in review
+
+def test_prepare_maintenance_solution_is_idempotent_with_quotes_in_directory():
+    """Regression test: idempotency with escaped quotes in directory path."""
+    original = (
+        "SET @CreateJobs = 'Y'\n"
+        "SET @BackupDirectory = NULL\n"
+    )
+    once = sql.prepare_maintenance_solution(original, "/data/o'brien/backup")
+    twice = sql.prepare_maintenance_solution(once, "/data/o'brien/backup")
+    assert once == twice
+
+
+def test_identifier_validation_rejects_trailing_newline():
+    """Regression test: trailing newline must be rejected."""
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.validate_identifier("taxi\n", "database")
+
+
+def test_set_recovery_simple_rejects_bad_identifier():
+    """Coverage: set_recovery_simple validates its identifier argument."""
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.set_recovery_simple("bad name")
+
+
+def test_data_file_size_mb_rejects_bad_identifier():
+    """Coverage: data_file_size_mb validates its identifier argument."""
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.data_file_size_mb("bad name")
+
+
+def test_max_loaded_at_rejects_bad_identifier():
+    """Coverage: max_loaded_at validates its identifier argument."""
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.max_loaded_at("bad name")
+
+
+def test_rows_per_type_rejects_bad_identifier():
+    """Coverage: rows_per_type validates its identifier argument."""
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.rows_per_type("bad name")
