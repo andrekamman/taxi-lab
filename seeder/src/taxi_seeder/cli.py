@@ -68,6 +68,19 @@ def _halt_label(rc: int) -> str:
     return "needs-review" if rc == NEEDS_REVIEW else "error"
 
 
+def load_exit_code(child_rc: int) -> int:
+    """Translate `taxi-load`'s exit code into this project's contract.
+
+    `taxi-run` returns 1 only for normalize's schema-drift halt -- a decision a
+    human genuinely has to make, which is what 1 means here. `taxi-load` returns
+    1 for "failed mid-load" (a dropped connection, a duckdb error on one type),
+    and taxi-seed's own orchestrator classifies that as PARTIAL and maps it to
+    2. Passing it through as 1 tells CI and operators to go inspect a drift
+    acknowledgment that does not exist, when a plain re-run is the remedy.
+    """
+    return FAILURE if child_rc == NEEDS_REVIEW else child_rc
+
+
 def main(argv=None) -> int:
     # parse_args() itself calls sys.exit(0) after printing help for -h/--help,
     # and sys.exit(2) after printing usage to stderr for an unrecognised
@@ -96,11 +109,14 @@ def main(argv=None) -> int:
         ola.run(settings)
 
         for data_type in settings.types:
-            rc = stages.load(settings, data_type)
+            child_rc = stages.load(settings, data_type)
+            rc = load_exit_code(child_rc)
             codes.append(rc)
             if rc != CLEAN:
-                print(f"{_halt_label(rc)}: load stage for {data_type} exited {rc}; "
-                      f"stopping", file=sys.stderr)
+                detail = (" (failed mid-load -- re-running resumes from the "
+                          "manifest)" if rc != child_rc else "")
+                print(f"{_halt_label(rc)}: load stage for {data_type} exited "
+                      f"{child_rc}{detail}; stopping", file=sys.stderr)
                 return worst(codes)
 
         backup.run(settings)

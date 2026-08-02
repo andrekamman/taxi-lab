@@ -402,6 +402,14 @@ Each step maps failure onto `taxi-seed`'s existing convention:
 | 1 | needs review | normalize halted on unacknowledged schema drift |
 | 2 | operational failure | SQL Server unreachable, `CREATE DATABASE` failed, backup failed verification |
 
+The mapping is stage-aware, because the child CLIs do not agree on what `1`
+means. `taxi-run` returns `1` only for normalize's schema-drift halt, which is
+exactly this table's "needs review". `taxi-load` returns `1` for *failed
+mid-load* — taxi-seed's own orchestrator classifies that as `PARTIAL` and maps
+it to `2`. The seeder does the same: a mid-load failure exits `2`, so a
+transient operational fault is never reported as blocked-on-a-human when a plain
+re-run is the remedy. The child's own exit code is still printed.
+
 A step exiting `1` or `2` stops the run there. No type is loaded whose normalize
 halted; no database is backed up whose load failed. Partial progress is always
 safe because every step is independently resumable — the next run resumes from

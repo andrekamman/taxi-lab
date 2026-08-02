@@ -39,6 +39,17 @@ def test_worst_of_nothing_is_clean():
     assert cli.worst([]) == 0
 
 
+def test_load_exit_1_is_an_operational_failure_not_needs_review():
+    """taxi-load's 1 is 'failed mid-load' -- taxi-seed's own orchestrator calls
+    that PARTIAL and maps it to 2. Only normalize's drift halt is needs-review."""
+    assert cli.load_exit_code(1) == 2
+
+
+def test_load_exit_codes_are_otherwise_passed_through():
+    assert cli.load_exit_code(0) == 0
+    assert cli.load_exit_code(2) == 2
+
+
 def test_missing_password_is_an_operational_failure(monkeypatch, capsys):
     monkeypatch.delenv("MSSQL_PASSWORD", raising=False)
     assert cli.main([]) == 2
@@ -166,6 +177,26 @@ def test_main_stops_after_load_fails_and_never_backs_up(monkeypatch, tmp_path, c
     ]
     err = capsys.readouterr().err
     assert "error:" in err
+
+
+def test_main_maps_a_mid_load_failure_to_exit_2(monkeypatch, tmp_path, capsys):
+    """A connection blip mid-load must not be reported as blocked-on-a-human:
+    exit 1 would tell CI a schema-drift decision is pending when a re-run is the
+    remedy."""
+    _base_env(monkeypatch, tmp_path, "yellow,green")
+
+    monkeypatch.setattr(preflight, "run", lambda settings, **kw: None)
+    monkeypatch.setattr(stages, "mirror", lambda settings, data_type, **kw: 0)
+    monkeypatch.setattr(provision, "run", lambda settings, **kw: True)
+    monkeypatch.setattr(ola, "run", lambda settings, **kw: True)
+    monkeypatch.setattr(stages, "load", lambda settings, data_type, **kw: 1)
+    monkeypatch.setattr(backup, "run", _never_called("backup.run"))
+
+    assert cli.main([]) == 2
+    err = capsys.readouterr().err
+    assert "error:" in err
+    assert "needs-review" not in err
+    assert "exited 1" in err  # the child's own code is still reported
 
 
 def test_main_maps_missing_ola_script_to_exit_2(monkeypatch, tmp_path, capsys):
