@@ -7,6 +7,7 @@ always safe because every step resumes from an observable.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from collections.abc import Iterable
@@ -17,6 +18,43 @@ from taxi_seeder.config import ConfigError, from_env
 CLEAN = 0
 NEEDS_REVIEW = 1
 FAILURE = 2
+
+# The image's ENTRYPOINT is ["taxi-seeder"] with the mssql service started via
+# depends_on: condition: service_healthy, so with no arg parsing at all,
+# `taxi-seeder --help` used to start a real SQL Server and run the live
+# seven-step pipeline against whatever data directory was mounted. Parsing
+# argv -- and doing it before from_env, which touches the environment, not
+# argv -- means -h/--help and unknown flags are handled before anything else
+# runs.
+_ENV_VARS_HELP = """\
+environment variables:
+  TAXI_DATA_DIR         bind-mounted data directory (default: /data)
+  MSSQL_PASSWORD        SA password (required)
+  TAXI_TYPES            comma-separated taxi types to mirror/normalize/load
+                        (default: yellow,green,fhv,fhvhv)
+  TAXI_RECENT           most recent N months to mirror; blank means full
+                        history
+  TAXI_DATA_FACTOR      mdf size = normalized parquet bytes x this factor,
+                        rounded up to 10 GB (default: 3.0)
+  MSSQL_DATA_SIZE_GB    skip the size estimate and use this instead; only
+                        consulted at database creation
+  MSSQL_LOG_SIZE_GB     ldf size in GB (default: 16)
+  MSSQL_FILEGROWTH_MB   data/log filegrowth in MB (default: 1024)
+"""
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    return argparse.ArgumentParser(
+        prog="taxi-seeder",
+        description=(
+            "Advance one bind-mounted data directory through mirror, "
+            "provision, load, and backup. Configured entirely by "
+            "environment variables -- there are no positional or optional "
+            "arguments to set here."
+        ),
+        epilog=_ENV_VARS_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
 
 def worst(codes: Iterable[int]) -> int:
@@ -31,6 +69,11 @@ def _halt_label(rc: int) -> str:
 
 
 def main(argv=None) -> int:
+    # parse_args() itself calls sys.exit(0) after printing help for -h/--help,
+    # and sys.exit(2) after printing usage to stderr for an unrecognised
+    # argument -- 2 already matches this module's FAILURE convention.
+    _build_parser().parse_args(argv)
+
     try:
         settings = from_env(os.environ)
     except ConfigError as e:

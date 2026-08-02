@@ -1,4 +1,30 @@
+import pytest
+
 from taxi_seeder import backup, cli, mssql, ola, preflight, provision, report, stages
+
+
+def test_help_exits_0_and_prints_usage_without_touching_pipeline(monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "run", _never_called("preflight.run"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--help"])
+
+    assert exc_info.value.code == 0
+    out = capsys.readouterr().out
+    assert "usage: taxi-seeder" in out
+    assert "TAXI_DATA_DIR" in out
+    assert "MSSQL_PASSWORD" in out
+
+
+def test_unknown_flag_exits_2_without_touching_pipeline(monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "run", _never_called("preflight.run"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--bogus"])
+
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "usage: taxi-seeder" in err
 
 
 def test_worst_prefers_failure():
