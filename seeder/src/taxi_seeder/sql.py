@@ -58,8 +58,10 @@ def ola_installed() -> str:
 def max_loaded_at(schema: str) -> str:
     sch = validate_identifier(schema, "schema")
     return (
-        f"SELECT CONVERT(VARCHAR(27), MAX(loaded_at), 126) "
-        f"FROM {sch}._load_manifest"
+        f"IF OBJECT_ID('{sch}._load_manifest', 'U') IS NULL\n"
+        f"    SELECT CONVERT(VARCHAR(27), NULL, 126)\n"
+        f"ELSE\n"
+        f"    SELECT CONVERT(VARCHAR(27), MAX(loaded_at), 126) FROM {sch}._load_manifest"
     )
 
 

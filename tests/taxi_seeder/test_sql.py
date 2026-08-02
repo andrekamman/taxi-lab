@@ -34,6 +34,7 @@ def test_max_loaded_at_query_uses_the_schema():
     q = sql.max_loaded_at("dbo")
     assert "dbo._load_manifest" in q
     assert "MAX(loaded_at)" in q
+    assert "OBJECT_ID" in q
 
 
 def test_ola_installed_query():

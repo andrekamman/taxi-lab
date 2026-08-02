@@ -2,7 +2,9 @@ import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 
-from taxi_seeder import backup
+import pytest
+
+from taxi_seeder import backup, mssql
 from taxi_seeder.config import from_env
 
 UTC = timezone.utc
@@ -90,11 +92,21 @@ def test_max_loaded_at_parses_iso_as_utc(tmp_path):
     assert got == T0
 
 
-def test_max_loaded_at_is_none_when_the_manifest_is_missing(tmp_path):
-    def failing(cmd, env, stdin_text):
-        return subprocess.CompletedProcess(cmd, 1, "", "Invalid object name")
+def test_max_loaded_at_is_none_when_the_manifest_table_is_missing(tmp_path):
+    """The query itself guards on OBJECT_ID and returns SQL NULL, which
+    mssql.scalar maps to None -- no error, no string-matching required."""
+    assert backup.max_loaded_at(settings_for(tmp_path), runner=Recorder(["NULL"])) is None
 
-    assert backup.max_loaded_at(settings_for(tmp_path), runner=failing) is None
+
+def test_max_loaded_at_propagates_a_genuine_sql_failure(tmp_path):
+    """Regression pin: a real sqlcmd failure (connection reset, permissions,
+    etc.) must raise, not be silently reinterpreted as 'nothing loaded' --
+    that would make a stale backup look current and skip the write it needs."""
+    def failing(cmd, env, stdin_text):
+        return subprocess.CompletedProcess(cmd, 1, "", "Login failed for user")
+
+    with pytest.raises(mssql.MssqlError):
+        backup.max_loaded_at(settings_for(tmp_path), runner=failing)
 
 
 def test_max_loaded_at_is_none_when_the_manifest_is_empty(tmp_path):

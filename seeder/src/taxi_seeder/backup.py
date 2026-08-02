@@ -33,20 +33,22 @@ def max_loaded_at(settings: Settings, *, runner=None) -> datetime | None:
     """Newest loaded_at in taxi-seed's _load_manifest, as an aware UTC datetime.
 
     Returns None when the table does not exist yet (nothing has ever been
-    loaded) or when it is empty.
+    loaded) or when it is empty. The missing-table case is expressed in the
+    query itself (an OBJECT_ID guard that returns SQL NULL), not by catching
+    mssql.MssqlError -- that exception covers any non-zero sqlcmd exit, so
+    catching it here would also swallow a genuine failure (a dropped
+    connection, a permissions error) and misreport it as "nothing loaded",
+    which would make a stale backup look current. A real failure propagates.
     """
-    try:
-        raw = mssql.scalar(settings, sql.max_loaded_at(settings.schema),
-                           database=settings.database, runner=runner)
-    except mssql.MssqlError:
-        return None
+    raw = mssql.scalar(settings, sql.max_loaded_at(settings.schema),
+                       database=settings.database, runner=runner)
     if not raw:
         return None
     # loaded_at is written with SYSUTCDATETIME(); style 126 gives naive ISO-8601.
     return datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
 
 
-def is_stale(max_loaded_at: datetime | None,
+def is_stale(loaded_at: datetime | None,
              newest_backup_mtime: datetime | None) -> bool:
     """Should this run take a backup?
 
@@ -57,16 +59,16 @@ def is_stale(max_loaded_at: datetime | None,
     """
     if newest_backup_mtime is None:
         return True
-    if max_loaded_at is None:
+    if loaded_at is None:
         return False
-    return max_loaded_at > newest_backup_mtime
+    return loaded_at > newest_backup_mtime
 
 
 def run(settings: Settings, *, runner=None) -> bool:
     """Back up when stale. Returns True when a backup was taken."""
     loaded_at = max_loaded_at(settings, runner=runner)
     existing = newest_backup(settings)
-    existing_mtime = backup_mtime(existing) if existing else None
+    existing_mtime = backup_mtime(existing)
 
     if not is_stale(loaded_at, existing_mtime):
         print(f"backup: current ({existing.name}), skipping")
