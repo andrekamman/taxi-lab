@@ -85,14 +85,41 @@ def compose(*args, data_dir, check=True, timeout=DEFAULT_TIMEOUT):
         )
 
 
-def sqlcmd(data_dir, query):
-    proc = compose(
-        "exec", "-T", "mssql",
+def _raw_sqlcmd(data_dir, query, check=True):
+    # -e rather than -P keeps the password out of sqlcmd's own argv, matching
+    # what mssql.build_cmd does in production.
+    return compose(
+        "exec", "-T", "-e", f"SQLCMDPASSWORD={PASSWORD}", "mssql",
         "/opt/mssql-tools18/bin/sqlcmd", "-S", "localhost", "-U", "sa",
-        "-P", PASSWORD, "-C", "-b", "-h", "-1", "-W", "-Q", query,
-        data_dir=data_dir,
+        "-C", "-b", "-h", "-1", "-W", "-Q", query,
+        data_dir=data_dir, check=check,
     )
-    return proc.stdout.strip()
+
+
+def sqlcmd(data_dir, query):
+    """Query the seeded database, bringing the server back up if needed.
+
+    Two things make this less trivial than `docker compose exec`:
+
+    1. `up --abort-on-container-exit` stops the whole stack once the seeder
+       finishes, so by the time these assertions run there is no container to
+       exec into at all.
+    2. `master` is deliberately not persisted (see docker-compose.yml), so if
+       Compose *recreates* the mssql container rather than restarting it, the
+       server comes back with no record of `taxi` even though the mdf/ldf are
+       sitting on the bind mount.
+
+    So: bring the database service up, wait for its healthcheck, and attach the
+    files if the server does not already know about them -- which is exactly
+    what provision.py does on a warm start, exercised here rather than mocked.
+    """
+    compose("up", "-d", "--wait", "mssql", data_dir=data_dir)
+    _raw_sqlcmd(data_dir, (
+        "IF DB_ID('taxi') IS NULL "
+        "CREATE DATABASE [taxi] ON (FILENAME = N'/data/mssql/data/taxi.mdf'), "
+        "(FILENAME = N'/data/mssql/log/taxi_log.ldf') FOR ATTACH"
+    ))
+    return _raw_sqlcmd(data_dir, query).stdout.strip()
 
 
 @pytest.fixture(scope="module")
