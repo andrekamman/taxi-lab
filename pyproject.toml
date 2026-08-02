@@ -34,6 +34,12 @@ packages = [
   "seeder/src/taxi_seeder",
 ]
 
+# seeder/sql/ lives outside src/, so without this the wheel omits it and the
+# container resolves taxi_seeder.ola.VENDORED_SCRIPT to a path that doesn't
+# exist -- a failure no unit test catches, since the tests inject script=.
+[tool.hatch.build.targets.wheel.force-include]
+"seeder/sql" = "taxi_seeder/sql"
+
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
 
