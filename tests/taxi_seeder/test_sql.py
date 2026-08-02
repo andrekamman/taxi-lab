@@ -1,0 +1,104 @@
+import pytest
+
+from taxi_seeder import sql
+
+
+def test_create_database_places_files_and_sizes_them():
+    stmt = sql.create_database(
+        "taxi", "/data/mssql/data/taxi.mdf", "/data/mssql/log/taxi_log.ldf",
+        data_mb=20480, log_mb=16384, growth_mb=1024,
+    )
+    assert "CREATE DATABASE [taxi]" in stmt
+    assert "FILENAME = N'/data/mssql/data/taxi.mdf'" in stmt
+    assert "FILENAME = N'/data/mssql/log/taxi_log.ldf'" in stmt
+    assert "SIZE = 20480MB" in stmt
+    assert "SIZE = 16384MB" in stmt
+    assert "FILEGROWTH = 1024MB" in stmt
+
+
+def test_set_recovery_simple():
+    assert sql.set_recovery_simple("taxi") == "ALTER DATABASE [taxi] SET RECOVERY SIMPLE"
+
+
+def test_database_exists_query():
+    assert "DB_ID('taxi')" in sql.database_exists("taxi")
+
+
+def test_data_file_size_query_targets_the_rows_file():
+    q = sql.data_file_size_mb("taxi")
+    assert "sys.database_files" in q
+    assert "type_desc = 'ROWS'" in q
+
+
+def test_max_loaded_at_query_uses_the_schema():
+    q = sql.max_loaded_at("dbo")
+    assert "dbo._load_manifest" in q
+    assert "MAX(loaded_at)" in q
+
+
+def test_ola_installed_query():
+    assert "dbo.DatabaseBackup" in sql.ola_installed()
+
+
+def test_rows_per_type_query_groups_by_type():
+    q = sql.rows_per_type("dbo")
+    assert "dbo._load_manifest" in q
+    assert "SUM(row_count)" in q
+    assert "GROUP BY data_type" in q
+
+
+def test_database_backup_uses_the_agreed_parameters():
+    stmt = sql.database_backup("taxi", "/data/mssql/backup")
+    for fragment in [
+        "@Databases = N'taxi'",
+        "@Directory = N'/data/mssql/backup'",
+        "@BackupType = 'FULL'",
+        "@Compress = 'Y'",
+        "@CheckSum = 'Y'",
+        "@Verify = 'Y'",
+        "@CleanupTime = 1",
+        "@CleanupMode = 'AFTER_BACKUP'",
+    ]:
+        assert fragment in stmt
+
+
+def test_identifier_validation_rejects_injection():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.validate_identifier("taxi]; DROP DATABASE [x", "database")
+
+
+def test_identifier_validation_accepts_normal_names():
+    assert sql.validate_identifier("taxi", "database") == "taxi"
+
+
+def test_create_database_rejects_a_bad_identifier():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.create_database("bad name", "/a.mdf", "/b.ldf", 1, 1, 1)
+
+
+def test_paths_with_quotes_are_escaped():
+    stmt = sql.create_database("taxi", "/data/o'brien.mdf", "/b.ldf", 1, 1, 1)
+    assert "N'/data/o''brien.mdf'" in stmt
+
+
+def test_prepare_maintenance_solution_disables_jobs_and_sets_directory():
+    original = (
+        "SET @CreateJobs = 'Y'\n"
+        "SET @BackupDirectory = NULL\n"
+        "SET @OutputFileDirectory = NULL\n"
+    )
+    out = sql.prepare_maintenance_solution(original, "/data/mssql/backup")
+    assert "SET @CreateJobs = 'N'" in out
+    assert "SET @CreateJobs = 'Y'" not in out
+    assert "SET @BackupDirectory = N'/data/mssql/backup'" in out
+
+
+def test_prepare_maintenance_solution_is_idempotent():
+    original = "SET @CreateJobs = 'Y'\nSET @BackupDirectory = NULL\n"
+    once = sql.prepare_maintenance_solution(original, "/b")
+    assert sql.prepare_maintenance_solution(once, "/b") == once
+
+
+def test_prepare_maintenance_solution_fails_loudly_if_markers_missing():
+    with pytest.raises(sql.SqlIdentifierError, match="CreateJobs"):
+        sql.prepare_maintenance_solution("-- nothing here\n", "/b")
