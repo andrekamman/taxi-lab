@@ -13,10 +13,16 @@ PyPI. Anything that *uses* the resulting data set lives in this repo.
   preprocessor. Turns parquet (or synthetic data specs) into a K6 test bundle: `CREATE
   TABLE` DDL, chunked JSON payloads, a generated `test.js`, and a manifest.
   See the [guide](docs/guides/k6-loadtest.md).
-- `seeder/` — *(designed, not yet built)* a Docker Compose stack that advances one
-  bind-mounted folder toward a complete deliverable set: raw parquet, normalized parquet, a
-  presized page-compressed SQL Server database, and a verified compressed Ola Hallengren
-  backup. See the [design spec](docs/specs/2026-08-01-seeder-container-design.md).
+- [`seeder/`](seeder/) — Docker Compose stack that advances one bind-mounted folder toward
+  a complete deliverable set: raw parquet, normalized parquet, a presized page-compressed
+  SQL Server database, and a verified compressed Ola Hallengren backup. Re-running resumes
+  from wherever the last run stopped.
+  See the [design spec](docs/specs/2026-08-01-seeder-container-design.md).
+
+  ```bash
+  cd seeder && cp .env.example .env   # set TAXI_DATA_DIR and MSSQL_PASSWORD
+  docker compose up --build
+  ```
 
 ## Install
 

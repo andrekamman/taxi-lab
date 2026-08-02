@@ -1,0 +1,49 @@
+name: taxi-seeder
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    # Ola's backup path is <Directory>/<@@SERVERNAME>/<db>/<type>/ and
+    # @@SERVERNAME follows the container hostname. Unpinned it is random per
+    # run, so every run would write to a new folder and cleanup would never
+    # find the previous backup.
+    hostname: taxi-sql
+    # The image runs as uid 10001, which cannot write into a fresh bind-mount
+    # subdirectory it does not own -- and the seeder cannot pre-chown them
+    # because Compose starts this service first. Alternative: chown -R 10001:0
+    # the host folder and drop this line.
+    user: root
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_PASSWORD:?set MSSQL_PASSWORD in .env}
+      # Developer edition: backup compression is unavailable in Express.
+      MSSQL_PID: Developer
+    volumes:
+      - ${TAXI_DATA_DIR:?set TAXI_DATA_DIR in .env}:/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  seeder:
+    build:
+      context: ..
+      dockerfile: seeder/Dockerfile
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      MSSQL_PASSWORD: ${MSSQL_PASSWORD:?}
+      TAXI_DATA_DIR: /data
+      TAXI_TYPES: ${TAXI_TYPES:-yellow,green,fhv,fhvhv}
+      TAXI_RECENT: ${TAXI_RECENT:-}
+      TAXI_DATA_FACTOR: ${TAXI_DATA_FACTOR:-3.0}
+      MSSQL_DATA_SIZE_GB: ${MSSQL_DATA_SIZE_GB:-}
+      MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-16}
+      MSSQL_FILEGROWTH_MB: ${MSSQL_FILEGROWTH_MB:-1024}
+    volumes:
+      - ${TAXI_DATA_DIR}:/data
+    working_dir: /data
+    restart: "no"
