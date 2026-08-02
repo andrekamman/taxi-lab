@@ -23,6 +23,13 @@ def worst(codes: Iterable[int]) -> int:
     return max(codes, default=CLEAN)
 
 
+def _halt_label(rc: int) -> str:
+    """1 is an expected, non-catastrophic halt (e.g. unacknowledged schema
+    drift) -- label it distinctly from a genuine operational failure so log
+    skimmers don't mistake one for the other."""
+    return "needs-review" if rc == NEEDS_REVIEW else "error"
+
+
 def main(argv=None) -> int:
     try:
         settings = from_env(os.environ)
@@ -38,8 +45,8 @@ def main(argv=None) -> int:
             rc = stages.mirror(settings, data_type)
             codes.append(rc)
             if rc != CLEAN:
-                print(f"error: mirror stage for {data_type} exited {rc}; stopping",
-                      file=sys.stderr)
+                print(f"{_halt_label(rc)}: mirror stage for {data_type} exited {rc}; "
+                      f"stopping", file=sys.stderr)
                 return worst(codes)
 
         provision.run(settings)
@@ -49,8 +56,8 @@ def main(argv=None) -> int:
             rc = stages.load(settings, data_type)
             codes.append(rc)
             if rc != CLEAN:
-                print(f"error: load stage for {data_type} exited {rc}; stopping",
-                      file=sys.stderr)
+                print(f"{_halt_label(rc)}: load stage for {data_type} exited {rc}; "
+                      f"stopping", file=sys.stderr)
                 return worst(codes)
 
         backup.run(settings)
