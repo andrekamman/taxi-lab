@@ -218,6 +218,23 @@ def test_main_maps_missing_ola_script_to_exit_2(monkeypatch, tmp_path, capsys):
     assert "vendored MaintenanceSolution.sql not found" in err
 
 
+def test_main_maps_a_missing_taxi_seed_cli_to_exit_2(monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "yellow")
+
+    monkeypatch.setattr(preflight, "run", lambda settings, **kw: None)
+
+    def fake_mirror(settings, data_type, **kw):
+        raise stages.StageCommandNotFoundError("'taxi-run' is not on PATH.")
+    monkeypatch.setattr(stages, "mirror", fake_mirror)
+
+    monkeypatch.setattr(provision, "run", _never_called("provision.run"))
+    monkeypatch.setattr(ola, "run", _never_called("ola.run"))
+    monkeypatch.setattr(backup, "run", _never_called("backup.run"))
+
+    assert cli.main([]) == 2
+    assert "not on PATH" in capsys.readouterr().err
+
+
 def test_main_maps_mssql_error_to_exit_2(monkeypatch, tmp_path, capsys):
     _base_env(monkeypatch, tmp_path, "yellow")
 

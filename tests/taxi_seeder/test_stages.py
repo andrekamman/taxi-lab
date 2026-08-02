@@ -1,4 +1,7 @@
+import os
 import subprocess
+
+import pytest
 
 from taxi_seeder import stages
 from taxi_seeder.config import from_env
@@ -65,3 +68,36 @@ def test_run_returns_the_child_exit_code():
         return subprocess.CompletedProcess(cmd, 1, "", "")
 
     assert stages.mirror(settings_for(), "yellow", runner=runner) == 1
+
+
+def test_load_passes_the_schema_and_user():
+    cmd = stages.load_cmd(settings_for(), "yellow")
+    assert cmd[cmd.index("--schema") + 1] == "dbo"
+    assert cmd[cmd.index("--user") + 1] == "sa"
+
+
+def test_the_child_env_is_a_full_environ_merge():
+    """The child needs PATH to find taxi-run/taxi-load at all; a regression that
+    replaced the merge with a bare dict would be maddening to diagnose from the
+    resulting FileNotFoundError."""
+    captured = {}
+
+    def runner(cmd, env, cwd):
+        captured["env"] = env
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    stages.mirror(settings_for(), "yellow", runner=runner)
+
+    assert set(os.environ) <= set(captured["env"])
+    assert captured["env"].get("PATH") == os.environ.get("PATH")
+
+
+def test_a_missing_taxi_seed_cli_is_a_typed_error_not_a_traceback():
+    """subprocess.run raises FileNotFoundError when the executable is not on
+    PATH; untyped it escapes cli.main's mapping as a traceback with Python's
+    exit code 1, which this project reserves for needs-review."""
+    def runner(cmd, env, cwd):
+        raise FileNotFoundError(2, "No such file or directory", cmd[0])
+
+    with pytest.raises(stages.StageCommandNotFoundError, match="taxi-load"):
+        stages.load(settings_for(), "yellow", runner=runner)

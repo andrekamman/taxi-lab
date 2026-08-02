@@ -10,6 +10,10 @@ import subprocess
 from taxi_seeder.config import Settings
 
 
+class StageCommandNotFoundError(Exception):
+    """A taxi-seed CLI is not on PATH. Maps to exit code 2."""
+
+
 def _default_runner(cmd, env, cwd):
     return subprocess.run(cmd, env=env, cwd=cwd, check=False)
 
@@ -41,7 +45,18 @@ def run(cmd: list[str], settings: Settings, *, runner=None) -> int:
     # CWD is the data dir because `normalize` resolves its mappings from the
     # relative path normalize/mappings/<type>.yaml.
     env = {**os.environ, "MSSQL_PASSWORD": settings.password}
-    proc = runner(cmd, env, str(settings.data_dir))
+    try:
+        proc = runner(cmd, env, str(settings.data_dir))
+    except FileNotFoundError as e:
+        # subprocess.run raises this when the executable is not on PATH. Untyped
+        # it escapes cli.main's exception-to-exit-code mapping as a traceback
+        # with Python's exit code 1 -- which this project reserves for
+        # needs-review. Same hardening ola.py already has.
+        raise StageCommandNotFoundError(
+            f"{cmd[0]!r} is not on PATH. The seeder image installs taxi-seed's "
+            f"CLIs; a run outside that image needs `uv sync` (or an equivalent "
+            f"install of taxi-seed) first."
+        ) from e
     return proc.returncode
 
 

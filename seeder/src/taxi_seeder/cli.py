@@ -121,7 +121,8 @@ def main(argv=None) -> int:
 
         backup.run(settings)
 
-    except (mssql.MssqlError, sql.SqlIdentifierError, ola.OlaScriptMissingError) as e:
+    except (mssql.MssqlError, sql.SqlIdentifierError, ola.OlaScriptMissingError,
+            stages.StageCommandNotFoundError) as e:
         print(f"error: {e}", file=sys.stderr)
         return FAILURE
 
