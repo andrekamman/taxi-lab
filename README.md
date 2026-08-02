@@ -40,23 +40,12 @@ uv sync --extra test
 `k6_loadtest` imports `taxi_shared` from `taxi-seed`, so taxi-seed is a hard dependency
 rather than an optional one.
 
-**taxi-seed currently resolves from a sibling checkout, not PyPI.** Clone the two repos
-side by side:
-
-```
-~/git/
-  taxi-seed/
-  taxi-lab/
-```
-
-The reason is a packaging collision: taxi-seed `v0.1.0` — the only release on PyPI —
-predates the k6 removal and still ships its own `k6_loadtest` package. Installed from
-PyPI it lands in `site-packages` as a real directory and *shadows* this repo's
-`k6_loadtest`, so taxi-lab's code silently never runs and its tests exercise taxi-seed's
-frozen copy instead. The removal is on taxi-seed `main` but has never been tagged.
-
-Once a taxi-seed release drops `k6_loadtest`, delete the `[tool.uv.sources]` block in
-`pyproject.toml` and pin that version instead.
+taxi-seed comes from PyPI, pinned `>=0.2.0`. That floor is load-bearing rather than
+cautious: `0.1.0` shipped its own `k6_loadtest` package, which installs into
+`site-packages` as a real directory and *shadows* this repo's `k6_loadtest` — taxi-lab's
+code then silently never runs and its tests exercise taxi-seed's frozen copy instead.
+`0.2.0` dropped it, and is also the first release whose generated `CREATE TABLE` DDL is
+page-compressed, which the seeder depends on.
 
 ## Test
 

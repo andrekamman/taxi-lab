@@ -226,30 +226,23 @@ requires-dist = [
     { name = "duckdb", specifier = ">=1.4.4" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "taxi-seed", editable = "../taxi-seed" },
+    { name = "taxi-seed", specifier = ">=0.2.0" },
 ]
 provides-extras = ["test"]
 
 [[package]]
 name = "taxi-seed"
-source = { editable = "../taxi-seed" }
+version = "0.2.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "duckdb" },
     { name = "httpx" },
     { name = "pyyaml" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "duckdb", specifier = ">=1.4.4" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
-    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.7" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/12/30/23d6e89cb7b83f603a24cc6ed395c816cf1036b07087881acae60d7a44ae/taxi_seed-0.2.0.tar.gz", hash = "sha256:f840e199ea1f0b91a16439bc46c3f6f59374873861e7ae3a642c59a8f9406a2f", size = 381239, upload-time = "2026-08-02T11:54:07.348Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/21/3d/7ba764c2a5a4b44d37382f71b5150235b9811da0ed91394735c98206cd0b/taxi_seed-0.2.0-py3-none-any.whl", hash = "sha256:4b1d71e8a410e4b846fa340eeab5612926000c39ccf0b96668b67340a9b309aa", size = 57504, upload-time = "2026-08-02T11:54:05.658Z" },
 ]
-provides-extras = ["docs", "test"]
 
 [[package]]
 name = "typing-extensions"
