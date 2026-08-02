@@ -28,7 +28,12 @@ services:
       - mssql-system:/var/opt/mssql
       - ${TAXI_DATA_DIR:?set TAXI_DATA_DIR in .env}:/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b"]
+      # SQLCMDPASSWORD, not -P: Compose turns $$ into $, the shell expands it,
+      # and with -P the plaintext password lands in sqlcmd's argv -- every 10
+      # seconds, for the container's whole lifetime, readable via `docker top`,
+      # via `ps` on the host, and by any process in the container. The env-var
+      # form is the same rule mssql.py's build_cmd follows.
+      test: ["CMD-SHELL", "SQLCMDPASSWORD=\"$$MSSQL_SA_PASSWORD\" /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -Q 'SELECT 1'"]
       interval: 10s
       timeout: 5s
       retries: 30
