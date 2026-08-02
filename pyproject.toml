@@ -13,7 +13,14 @@ dependencies = [
     # runs. 0.2.0 dropped it, and is also the first release whose generated DDL
     # is page-compressed, which the seeder depends on.
     "taxi-seed>=0.2.0",
-    "duckdb>=1.4.4",
+    # Pinned exactly, and not by preference. taxi-seed's loader asserts the
+    # DuckDB community `mssql` extension is commit 7e57d24, and the registry
+    # serves a build per DuckDB version: 1.4.4 -> 7e57d24, 1.5.5 -> 39e547c.
+    # A floating `duckdb>=1.4.4` therefore resolves to 1.5.5 in a fresh install,
+    # gets the newer extension, and taxi-seed refuses to load with
+    # "mssql extension version '39e547c' != expected '7e57d24'". The two
+    # versions move together; do not relax this without re-spiking the pair.
+    "duckdb==1.4.4",
     "pyyaml>=6.0",
 ]
 classifiers = [
