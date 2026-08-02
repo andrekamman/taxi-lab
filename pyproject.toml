@@ -58,3 +58,6 @@ taxi-seeder = "taxi_seeder.cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--import-mode=importlib"
+markers = [
+    "integration: needs Docker and a real SQL Server; deselect with -m 'not integration'",
+]
