@@ -19,6 +19,13 @@ services:
       # Developer edition: backup compression is unavailable in Express.
       MSSQL_PID: Developer
     volumes:
+      # master/msdb live here. Without a volume they sit in the container's
+      # writable layer and `docker compose down` destroys them, while the user
+      # database's mdf/ldf survive on the bind mount below -- so the next run
+      # would see no 'taxi' database, try to CREATE over the existing files, and
+      # fail with Msg 5170 forever. The named volume keeps the two halves in
+      # step; provision.py's FOR ATTACH branch covers `down -v` as well.
+      - mssql-system:/var/opt/mssql
       - ${TAXI_DATA_DIR:?set TAXI_DATA_DIR in .env}:/data
     healthcheck:
       test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b"]
@@ -47,3 +54,6 @@ services:
       - ${TAXI_DATA_DIR}:/data
     working_dir: /data
     restart: "no"
+
+volumes:
+  mssql-system:

@@ -35,6 +35,24 @@ def create_database(database: str, mdf_path: str, ldf_path: str,
     )
 
 
+def attach_database(database: str, mdf_path: str, ldf_path: str) -> str:
+    """Re-register an existing mdf/ldf pair with a server that has forgotten it.
+
+    The user database's files live on the bind mount and survive
+    `docker compose down`; the system databases that record them do not
+    necessarily. Without this, the next run sees DB_ID('taxi') IS NULL, tries to
+    CREATE, and SQL Server refuses with Msg 5170 ("cannot create file ...
+    because it already exists") forever after.
+    """
+    db = validate_identifier(database, "database")
+    return (
+        f"CREATE DATABASE [{db}]\n"
+        f"  ON (FILENAME = N'{_lit(str(mdf_path))}'),\n"
+        f"     (FILENAME = N'{_lit(str(ldf_path))}')\n"
+        f"  FOR ATTACH"
+    )
+
+
 def set_recovery_simple(database: str) -> str:
     return f"ALTER DATABASE [{validate_identifier(database, 'database')}] SET RECOVERY SIMPLE"
 

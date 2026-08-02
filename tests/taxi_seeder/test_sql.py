@@ -16,6 +16,27 @@ def test_create_database_places_files_and_sizes_them():
     assert "FILEGROWTH = 1024MB" in stmt
 
 
+def test_attach_database_reattaches_both_files_without_sizing_them():
+    stmt = sql.attach_database(
+        "taxi", "/data/mssql/data/taxi.mdf", "/data/mssql/log/taxi_log.ldf")
+    assert "CREATE DATABASE [taxi]" in stmt
+    assert "FILENAME = N'/data/mssql/data/taxi.mdf'" in stmt
+    assert "FILENAME = N'/data/mssql/log/taxi_log.ldf'" in stmt
+    assert stmt.rstrip().endswith("FOR ATTACH")
+    # Sizing an existing file is meaningless and would be rejected.
+    assert "SIZE =" not in stmt
+
+
+def test_attach_database_rejects_a_bad_identifier():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.attach_database("bad name", "/a.mdf", "/b.ldf")
+
+
+def test_attach_database_escapes_quotes_in_paths():
+    stmt = sql.attach_database("taxi", "/data/o'brien.mdf", "/b.ldf")
+    assert "N'/data/o''brien.mdf'" in stmt
+
+
 def test_set_recovery_simple():
     assert sql.set_recovery_simple("taxi") == "ALTER DATABASE [taxi] SET RECOVERY SIMPLE"
 

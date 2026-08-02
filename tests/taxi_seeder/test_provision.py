@@ -71,6 +71,42 @@ def test_sizing_counts_only_selected_types(tmp_path):
     assert "SIZE = 20480MB" in "\n".join(rec.statements)
 
 
+def make_existing_files(settings):
+    """The mdf/ldf a previous run left on the bind mount."""
+    settings.mssql_data_dir.mkdir(parents=True, exist_ok=True)
+    settings.mssql_log_dir.mkdir(parents=True, exist_ok=True)
+    settings.mdf_path.write_bytes(b"mdf")
+    settings.ldf_path.write_bytes(b"ldf")
+
+
+def test_attaches_when_the_files_survive_but_the_server_forgot_the_database(tmp_path):
+    """`docker compose down` destroys master while the mdf/ldf survive on the
+    bind mount. Creating over them fails with Msg 5170 on every run forever."""
+    s = settings_for(tmp_path)
+    make_existing_files(s)
+    write_parquet(tmp_path, "yellow", 4 * GB)
+    rec = Recorder(["0"])  # database_exists -> 0
+
+    assert provision.run(s, runner=rec) is True
+
+    joined = "\n".join(rec.statements)
+    assert "FOR ATTACH" in joined
+    assert "SIZE =" not in joined            # never re-size an existing file
+    assert "SET RECOVERY SIMPLE" in joined
+
+
+def test_creates_rather_than_attaches_when_no_mdf_is_on_disk(tmp_path):
+    s = settings_for(tmp_path)
+    write_parquet(tmp_path, "yellow", 4 * GB)
+    rec = Recorder(["0"])
+
+    provision.run(s, runner=rec)
+
+    joined = "\n".join(rec.statements)
+    assert "FOR ATTACH" not in joined
+    assert "SIZE = 20480MB" in joined
+
+
 def test_skips_creation_when_the_database_exists(tmp_path):
     s = settings_for(tmp_path)
     write_parquet(tmp_path, "yellow", 1 * GB)

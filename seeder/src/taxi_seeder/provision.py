@@ -22,8 +22,29 @@ def _allocated_mb(settings: Settings, runner) -> int:
         return 0
 
 
+def _attach(settings: Settings, runner) -> None:
+    print(
+        f"provision: {settings.database!r} is not registered on this server, but "
+        f"{settings.mdf_path} already exists -- attaching the existing files "
+        f"instead of creating new ones"
+    )
+    mssql.run(
+        settings,
+        sql.attach_database(settings.database, str(settings.mdf_path),
+                            str(settings.ldf_path)),
+        database="master", runner=runner,
+    )
+
+
 def run(settings: Settings, *, runner=None) -> bool:
-    """Create the database if absent. Returns True when it created it."""
+    """Create or attach the database if absent. True when it did either.
+
+    The attach branch is the warm-start path: the mdf/ldf live on the bind mount
+    and survive `docker compose down`, but the system databases that record them
+    live in the container. Creating over an existing file fails with Msg 5170
+    and keeps failing on every subsequent run, so an orphaned mdf is attached,
+    not recreated.
+    """
     exists = mssql.scalar(settings, sql.database_exists(settings.database),
                           database="master", runner=runner) == "1"
 
@@ -46,6 +67,12 @@ def run(settings: Settings, *, runner=None) -> bool:
         else:
             print(f"provision: database {settings.database!r} exists, skipping")
         return False
+
+    if settings.mdf_path.exists():
+        _attach(settings, runner)
+        mssql.run(settings, sql.set_recovery_simple(settings.database),
+                  database="master", runner=runner)
+        return True
 
     log_mb = sizing.log_size_mb(settings.log_size_gb)
     print(

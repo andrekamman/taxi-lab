@@ -44,8 +44,9 @@ services:
             hostname: taxi-sql            # pins @@SERVERNAME
             user: root                    # bind-mount friendliness
             environment: ACCEPT_EULA, MSSQL_SA_PASSWORD, MSSQL_PID=Developer
-            volume: ${TAXI_DATA_DIR}:/data
-            healthcheck: sqlcmd -Q "SELECT 1"
+            volumes: mssql-system:/var/opt/mssql   # master/msdb survive `down`
+                     ${TAXI_DATA_DIR}:/data
+            healthcheck: sqlcmd -Q "SELECT 1"      # password via SQLCMDPASSWORD
 
   seeder:   build: ./seeder
             depends_on: mssql (condition: service_healthy)
@@ -145,7 +146,9 @@ internals.
 2. mirror      per type in TAXI_TYPES:
                taxi-run <type> --data-dir /data        (deliberately no --load)
 3. provision   if DB_ID('taxi') IS NULL:
-               size from raw-normalized -> CREATE DATABASE -> SET RECOVERY SIMPLE
+                 if taxi.mdf already exists: CREATE DATABASE ... FOR ATTACH
+                 else: size from raw-normalized -> CREATE DATABASE
+                 then: SET RECOVERY SIMPLE
                else: emit the autogrowth warning if warranted
 4. ola         if OBJECT_ID('dbo.DatabaseBackup') IS NULL:
                run MaintenanceSolution.sql against master
@@ -234,6 +237,30 @@ CREATE DATABASE [taxi]
            SIZE = <ldf>, FILEGROWTH = <growth>);
 ALTER DATABASE [taxi] SET RECOVERY SIMPLE;
 ```
+
+### Warm start: attach rather than create
+
+The mdf/ldf are deliverables in their own right, and they live on the bind mount
+— but the system databases that *record* them (`master`, `msdb`) live in
+`/var/opt/mssql`. Two things follow, and both are handled:
+
+- `/var/opt/mssql` is a named Compose volume, so a plain `docker compose down`
+  no longer discards `master` while the user database's files survive.
+- When `DB_ID('taxi') IS NULL` but `mssql/data/taxi.mdf` exists on disk anyway
+  (`down -v`, a moved data folder, a rebuilt server), provisioning attaches
+  rather than creates:
+
+```sql
+CREATE DATABASE [taxi]
+  ON (FILENAME = '/data/mssql/data/taxi.mdf'),
+     (FILENAME = '/data/mssql/log/taxi_log.ldf')
+  FOR ATTACH;
+```
+
+Without this, `CREATE DATABASE` fails with Msg 5170 ("cannot create file …
+because it already exists") — and keeps failing on every subsequent run, since
+nothing about the state changes. The only escape would be deleting the files and
+reloading from parquet.
 
 SIMPLE recovery: this is a rebuildable seed database whose real source of truth
 is the parquet, so point-in-time recovery has no meaning. Bulk loads stay
