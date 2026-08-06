@@ -522,7 +522,7 @@ taxi-lab/
     README.md  build_k6.sh  config.sample.yaml
     src/k6_loadtest/{__init__,config,data_export,k6_generator,preprocess}.py
   seeder/
-    Dockerfile  docker-compose.yml  .env.example
+    Dockerfile  docker-compose.yml
     src/taxi_seeder/{cli,preflight,provision,ola,backup,report}.py
     sql/                    pinned Ola MaintenanceSolution.sql
 ```

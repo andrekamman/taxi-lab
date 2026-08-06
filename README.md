@@ -30,8 +30,25 @@ Run it again on the same folder and it continues from where the last run stopped
 step reads the folder to decide whether it has work to do, so there is no state file to
 go stale.
 
+Two settings are required. Put them in `seeder/.env`, which is gitignored:
+
 ```bash
-cd seeder && cp .env.example .env   # set TAXI_DATA_DIR and MSSQL_PASSWORD
+cat > seeder/.env <<'ENV'
+TAXI_DATA_DIR=/srv/taxi
+MSSQL_PASSWORD=change-me-Str0ng!
+ENV
+```
+
+`TAXI_DATA_DIR` is the host folder to fill, and it must exist first. `MSSQL_PASSWORD` must
+satisfy SQL Server's complexity policy, or the `mssql` container exits during startup.
+Every other variable has a working default — the
+[design spec](docs/specs/2026-08-01-seeder-container-design.md#configuration) lists all of
+them.
+
+Then run the stack:
+
+```bash
+cd seeder
 docker compose up --build --abort-on-container-exit --exit-code-from seeder
 ```
 

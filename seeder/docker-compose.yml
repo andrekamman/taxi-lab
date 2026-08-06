@@ -66,8 +66,8 @@ services:
       MSSQL_LOG_SIZE_GB: ${MSSQL_LOG_SIZE_GB:-}
       MSSQL_FILEGROWTH_MB: ${MSSQL_FILEGROWTH_MB:-}
       # Every remaining variable config.from_env reads. Listed even where the
-      # default is the only sane value in this stack: a variable documented in
-      # .env.example that never reaches the container is worse than an
+      # default is the only sane value in this stack: a variable the design
+      # spec documents but that never reaches the container is worse than an
       # undocumented one.
       MSSQL_HOST: ${MSSQL_HOST:-}
       MSSQL_PORT: ${MSSQL_PORT:-}
