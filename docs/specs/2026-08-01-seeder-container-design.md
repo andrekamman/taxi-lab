@@ -180,8 +180,9 @@ placement and presizing.
 
 ## Idempotency
 
-Every step's skip condition is a real observable. There is no seeder state file,
-so there is no seeder state file to corrupt or to disagree with reality.
+Every step decides whether to skip by looking at something real: a file on disk, a
+row in a table, an object in the database. The seeder keeps no state file of its
+own, so its view always matches what is actually there.
 
 | Step | Skip condition | Owned by |
 |---|---|---|
@@ -316,7 +317,7 @@ persisting `master` traded one bug for two:
 - **A moved `TAXI_DATA_DIR` broke.** A persisted `master` still records the
   old path, so provisioning found `DB_ID('taxi')` non-NULL, took the skip
   branch, and failed opaquely reading file sizes of a database it could not
-  open at the new path — *after* the mirror stage had already run, which on a
+  open at the new path — *after* the mirror step had already run, which on a
   full dataset is hours of wasted work.
 - **A rotated `MSSQL_PASSWORD` silently never took effect.** SQL Server only
   consumes `MSSQL_SA_PASSWORD` on first initialization of `/var/opt/mssql`.
@@ -363,32 +364,30 @@ is non-NULL, so provisioning takes the skip branch and then fails querying
 
 ### Instant file initialization — open risk
 
-Presizing a multi-hundred-GB mdf is only fast if the file is not zero-filled
-first. On Windows this is instant file initialization via
-`SE_MANAGE_VOLUME_NAME`; on SQL Server on Linux the behavior depends on the host
-filesystem and is **not confirmed**. If files are zero-filled, first-run
-provisioning of a large mdf could take a very long time.
+Presizing a multi-hundred-GB mdf is fast only if SQL Server skips zero-filling
+the file first. Windows offers this as instant file initialization, through the
+`SE_MANAGE_VOLUME_NAME` privilege. On SQL Server on Linux the behavior depends on
+the host filesystem, and this spec does **not** confirm it either way. If SQL
+Server does zero-fill, first-run provisioning of a large mdf can take a very long
+time.
 
-**This risk is knowingly deferred, not discharged.** Nothing in the branch
-measures it. Measuring it honestly needs a real SQL Server on a real host
-filesystem, which means the integration suite in
-`tests/taxi_seeder/test_integration_compose.py` — and that suite has never been
-executed, being blocked on a taxi-seed release (see its module docstring). The
-first real run of `uv run pytest -m integration` is what discharges this risk;
-until then the answer is unknown and is treated as unknown.
+**The risk stays open.** The integration suite in
+`tests/taxi_seeder/test_integration_compose.py` now runs against a live Docker
+daemon, but it runs with `TAXI_RECENT=1` — roughly 128 MB of parquet, and roughly
+a 1 GB mdf. That size is far too small to show the difference. A run at
+full-history scale is what will answer the question.
 
-What the implementation does in the meantime is refuse to be silent about it:
-`provision.run` prints the total size it is about to allocate and warns that the
-single `CREATE DATABASE` produces no output and may run for a long time if the
-files are zero-filled, so a user watching a still terminal knows it is not hung.
-There is no timeout on that `sqlcmd` call, deliberately — a timeout whose
-correct value is unknown would abort legitimate work.
+Until then, provisioning stays loud about it. `provision.run` prints the total
+size it is about to allocate, and warns that the single `CREATE DATABASE` produces
+no output and may run for a long time. A user watching a still terminal therefore
+knows the run is alive. That `sqlcmd` call has no timeout, on purpose: a timeout
+whose correct value is unknown would abort legitimate work.
 
-If that first integration run shows allocation is slow, the fallback stands: a
-modest initial size plus 1 GB autogrowth, which surrenders some fragmentation
-benefit and nothing else. Log files are always zero-filled on every platform,
-which is a further argument for keeping the ldf's default capped rather than
-scaling it linearly with a large mdf.
+If a full-scale run shows that allocation is slow, the fallback stands: a modest
+initial size plus 1 GB autogrowth. That surrenders some fragmentation benefit and
+nothing else. Log files are zero-filled on every platform, which is a further
+argument for keeping the ldf's default capped instead of scaling it with a large
+mdf.
 
 ## Page compression
 
@@ -495,7 +494,7 @@ Each step maps failure onto `taxi-seed`'s existing convention:
 | 1 | needs review | normalize halted on unacknowledged schema drift |
 | 2 | operational failure | SQL Server unreachable, `CREATE DATABASE` failed, the data volume cannot fit the planned allocation, backup failed verification |
 
-The mapping is stage-aware, because the child CLIs do not agree on what `1`
+The mapping is step-aware, because the child CLIs do not agree on what `1`
 means. `taxi-run` returns `1` only for normalize's schema-drift halt, which is
 exactly this table's "needs review". `taxi-load` returns `1` for *failed
 mid-load* — taxi-seed's own orchestrator classifies that as `PARTIAL` and maps
@@ -508,9 +507,9 @@ halted; no database is backed up whose load failed. Partial progress is always
 safe because every step is independently resumable — the next run resumes from
 what is actually on disk and in the manifest, not from a recorded intention.
 
-A failed `@Verify='Y'` is worth naming explicitly: because cleanup is
-`AFTER_BACKUP`, the previous good backup is still present. The run exits `2`
-having destroyed nothing.
+One case deserves a note. When `@Verify='Y'` fails, the previous good backup is
+still on disk, because cleanup is `AFTER_BACKUP`. The run exits `2` and destroys
+nothing.
 
 ## Repo layout
 

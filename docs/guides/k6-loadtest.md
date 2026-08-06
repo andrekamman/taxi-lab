@@ -1,8 +1,12 @@
 # K6 Load Test
 
-`k6-loadtest` is a K6-based SQL Server load tester with a Python preprocessor. It turns parquet files (or synthetic data specs) into a K6 test bundle: CREATE TABLE DDL, chunked JSON payloads, a K6 `test.js`, and a manifest. Point it at a SQL Server (local Docker, on-prem VM, Azure SQL) and it exercises insert, update, and delete workloads under a configurable virtual-user (VU) profile.
+`k6-loadtest` is a K6 load tester for SQL Server, with a Python preprocessor in front of it. The preprocessor reads parquet files (or a synthetic data spec) and writes a K6 test bundle: `CREATE TABLE` DDL, chunked JSON payloads, a K6 `test.js`, and a bundle manifest. Point K6 at a SQL Server — local Docker, an on-prem VM, Azure SQL — and it runs insert, update, and delete workloads under a virtual-user (VU) profile you configure.
 
-Why the extra preprocessing step and a custom K6 binary? SQL Server support in K6 does not ship out of the box — it comes via the [xk6-sql](https://github.com/grafana/xk6-sql) extension plus Grafana's [`xk6-sql-driver-sqlserver`](https://github.com/grafana/xk6-sql-driver-sqlserver) driver, both of which have to be compiled into a custom K6 binary using [`xk6`](https://github.com/grafana/xk6). The preprocessor's job is to bridge parquet or synthetic-mode configs into the JSON-and-JavaScript shape K6 actually expects at runtime.
+Two parts of that setup need an explanation.
+
+**Why a custom K6 binary?** Stock K6 cannot talk to SQL Server. That support comes from the [xk6-sql](https://github.com/grafana/xk6-sql) extension and Grafana's [`xk6-sql-driver-sqlserver`](https://github.com/grafana/xk6-sql-driver-sqlserver) driver. You compile both into a K6 binary of your own with [`xk6`](https://github.com/grafana/xk6). Step 1 below does this for you.
+
+**Why a preprocessor?** At runtime K6 reads JavaScript and JSON. Your data is parquet and your configuration is YAML. The preprocessor converts the second pair into the first.
 
 ## Prerequisites
 
@@ -14,7 +18,7 @@ Why the extra preprocessing step and a custom K6 binary? SQL Server support in K
     - Any other cloud SQL Server. SQL Edge and SQL Server 2022 both work.
 - **`uv sync`** in the repo root so the `k6-preprocess` entry point is on your PATH.
 
-## 5-step setup
+## Setup, in six steps
 
 ### 1. Build the custom K6 binary
 
@@ -166,7 +170,7 @@ targets:
     table: yellow_trips
 ```
 
-`MSSQL_PASSWORD` must be exported in the environment when you run K6 (`MSSQL_PASSWORD='YourStrong@Passw0rd' ./k6-loadtest/k6 run …`). The preprocessor preserves the `${VAR}` placeholder in the manifest so K6 does the substitution at runtime, not at preprocess time. This keeps passwords out of the generated `test.js` and out of your git history.
+`MSSQL_PASSWORD` must be exported in the environment when you run K6 (`MSSQL_PASSWORD='YourStrong@Passw0rd' ./k6-loadtest/k6 run …`). The preprocessor keeps the `${VAR}` placeholder intact in the bundle manifest, so K6 substitutes the value at runtime. Your password therefore stays out of the generated `test.js` and out of your git history.
 
 ## Config summary
 
