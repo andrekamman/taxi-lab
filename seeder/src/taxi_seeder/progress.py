@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 
+from taxi_seeder.config import Settings
+
 
 def utc_hms(epoch_s: float) -> str:
     return time.strftime("%H:%M:%S", time.gmtime(epoch_s))
@@ -84,3 +86,58 @@ def format_progress(label: str, *, rows: int | None, total: int | None,
     if remaining is not None:
         parts.append(f"eta {humanize_duration(remaining)}")
     return f"{label}: " + ", ".join(parts)
+
+
+def _duckdb_footer_rows(paths: list[str]) -> int:
+    """Sum num_rows from the parquet footers. Metadata only -- no row scan."""
+    import duckdb
+
+    con = duckdb.connect()
+    try:
+        row = con.execute(
+            "SELECT SUM(num_rows) FROM parquet_file_metadata(?)", [paths]
+        ).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    finally:
+        con.close()
+
+
+def expected_rows(settings: Settings, data_type: str, *, reader=None) -> int | None:
+    """Total rows the normalized parquet holds for one trip type.
+
+    This is what makes a percentage and an ETA possible at all. None when the
+    tree is missing or unreadable -- the heartbeat then simply omits both rather
+    than failing.
+    """
+    reader = reader or _duckdb_footer_rows
+    base = settings.raw_normalized_dir / data_type
+    if not base.is_dir():
+        return None
+    paths = [str(p) for p in sorted(base.rglob("*.parquet"))]
+    if not paths:
+        return None
+    try:
+        return reader(paths)
+    except Exception:
+        # The one place this module allows a bare except: the caller is a
+        # progress line, the reader is duckdb, and no duckdb failure justifies
+        # aborting a 13-hour load.
+        return None
+
+
+def normalized_files(settings: Settings, data_type: str) -> int | None:
+    """Normalized parquet files on disk for one trip type -- mirror's sample.
+
+    Mirror has no row count to read: the rows are not in the database yet, and
+    the months still to download are not on disk to be counted. The file count
+    is the only thing that moves, so the mirror line carries a count and a rate
+    but no percentage and no ETA.
+
+    Zero rather than None for an absent directory: a mirror that has not written
+    its first file is at zero, which is an observation, not a failure to observe.
+    """
+    base = settings.raw_normalized_dir / data_type
+    try:
+        return sum(1 for _ in base.rglob("*.parquet")) if base.is_dir() else 0
+    except OSError:
+        return None

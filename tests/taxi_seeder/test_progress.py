@@ -7,6 +7,19 @@ formatting from the thread in the first place.
 import pytest
 
 from taxi_seeder import progress
+from taxi_seeder.config import from_env
+
+
+def settings_for(tmp_path, **env):
+    return from_env({"MSSQL_PASSWORD": "pw", "TAXI_DATA_DIR": str(tmp_path), **env})
+
+
+def _normalized(tmp_path, *names, year="2019", data_type="fhvhv"):
+    d = tmp_path / "raw-normalized" / data_type / year
+    d.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (d / name).touch()
+    return d
 
 
 def test_utc_hms_formats_epoch_as_utc_clock_time():
@@ -98,3 +111,71 @@ def test_format_progress_names_the_unit_when_the_sample_is_unknown():
         unit="files",
     )
     assert line == "mirror yellow: files unavailable, elapsed 30s"
+
+
+def test_expected_rows_sums_the_footers(tmp_path):
+    _normalized(tmp_path, "fhvhv_tripdata_2019-02.parquet",
+                "fhvhv_tripdata_2019-03.parquet")
+    seen = {}
+
+    def reader(paths):
+        seen["paths"] = sorted(paths)
+        return 234_630_264
+
+    assert progress.expected_rows(
+        settings_for(tmp_path), "fhvhv", reader=reader) == 234_630_264
+    assert len(seen["paths"]) == 2
+
+
+def test_expected_rows_is_none_when_the_tree_is_absent(tmp_path):
+    assert progress.expected_rows(
+        settings_for(tmp_path), "fhvhv", reader=lambda p: 1) is None
+
+
+def test_expected_rows_is_none_when_the_tree_is_empty(tmp_path):
+    (tmp_path / "raw-normalized" / "fhvhv").mkdir(parents=True)
+    assert progress.expected_rows(
+        settings_for(tmp_path), "fhvhv", reader=lambda p: 1) is None
+
+
+def test_expected_rows_is_none_when_the_reader_fails(tmp_path):
+    """No duckdb failure justifies aborting a 13-hour load."""
+    _normalized(tmp_path, "fhvhv_tripdata_2019-02.parquet")
+
+    def reader(paths):
+        raise RuntimeError("duckdb exploded")
+
+    assert progress.expected_rows(settings_for(tmp_path), "fhvhv",
+                                  reader=reader) is None
+
+
+def test_duckdb_footer_rows_reads_real_parquet(tmp_path):
+    """Guards the default reader against a duckdb API change: the plan's
+    parameterised table-function call is the part that could quietly break."""
+    import duckdb
+
+    con = duckdb.connect()
+    a, b = tmp_path / "a.parquet", tmp_path / "b.parquet"
+    con.execute(f"COPY (SELECT range FROM range(1000)) TO '{a}' (FORMAT PARQUET)")
+    con.execute(f"COPY (SELECT range FROM range(234)) TO '{b}' (FORMAT PARQUET)")
+    con.close()
+
+    assert progress._duckdb_footer_rows([str(a), str(b)]) == 1234
+
+
+def test_normalized_files_counts_the_whole_tree(tmp_path):
+    _normalized(tmp_path, "fhvhv_tripdata_2019-02.parquet",
+                "fhvhv_tripdata_2019-03.parquet")
+    _normalized(tmp_path, "fhvhv_tripdata_2020-01.parquet", year="2020")
+    assert progress.normalized_files(settings_for(tmp_path), "fhvhv") == 3
+
+
+def test_normalized_files_is_zero_before_the_tree_exists(tmp_path):
+    """A mirror that has not written its first file yet is at zero, not
+    unknown -- an absent directory is an observation, not a failure to observe."""
+    assert progress.normalized_files(settings_for(tmp_path), "fhvhv") == 0
+
+
+def test_normalized_files_ignores_other_trip_types(tmp_path):
+    _normalized(tmp_path, "yellow_tripdata_2019-02.parquet", data_type="yellow")
+    assert progress.normalized_files(settings_for(tmp_path), "fhvhv") == 0
