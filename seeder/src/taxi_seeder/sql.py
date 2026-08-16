@@ -179,3 +179,57 @@ def set_max_server_memory(mb: int) -> str:
         f"EXEC sp_configure 'max server memory (MB)', {mb};\n"
         "RECONFIGURE;"
     )
+
+
+def inconsistent_years(schema: str, data_type: str) -> str:
+    """Years whose committed rows disagree with their manifest rows.
+
+    taxi-seed's own integrity gate, asked here because the caller schedules the
+    shards and must reset such a year before dispatching any month of it. The
+    FULL OUTER JOIN matters: a year can have table rows and no manifest rows
+    (a crashed load) or manifest rows and no table (a dropped table).
+    """
+    sch = validate_identifier(schema, "schema")
+    dt = validate_identifier(data_type, "trip type")
+    return (
+        f"IF OBJECT_ID('{_lit(sch)}._load_manifest', 'U') IS NULL\n"
+        f"    SELECT TOP 0 CAST(NULL AS INT);\n"
+        f"ELSE\n"
+        f"WITH t AS (\n"
+        f"  SELECT TRY_CAST(RIGHT(tb.name, 4) AS INT) AS year,\n"
+        f"         SUM(p.rows) AS table_rows\n"
+        f"  FROM sys.tables tb\n"
+        f"  JOIN sys.schemas s ON s.schema_id = tb.schema_id\n"
+        f"  JOIN sys.partitions p ON p.object_id = tb.object_id\n"
+        f"   AND p.index_id IN (0, 1)\n"
+        f"  WHERE s.name = '{_lit(sch)}'\n"
+        f"    AND tb.name LIKE '{_lit(dt)}\\_%' ESCAPE '\\'\n"
+        f"  GROUP BY tb.name\n"
+        f"), m AS (\n"
+        f"  SELECT year, SUM(row_count) AS manifest_rows\n"
+        f"  FROM {sch}._load_manifest WHERE data_type = '{_lit(dt)}'\n"
+        f"  GROUP BY year\n"
+        f")\n"
+        f"SELECT COALESCE(t.year, m.year) FROM t\n"
+        f"FULL OUTER JOIN m ON m.year = t.year\n"
+        f"WHERE ISNULL(t.table_rows, 0) <> ISNULL(m.manifest_rows, 0)\n"
+        f"  AND COALESCE(t.year, m.year) IS NOT NULL\n"
+        f"ORDER BY 1"
+    )
+
+
+def reset_year(schema: str, data_type: str, year: int) -> str:
+    """Empty one year table and forget its manifest rows, so every month of it
+    reloads as a clean append."""
+    sch = validate_identifier(schema, "schema")
+    dt = validate_identifier(data_type, "trip type")
+    if isinstance(year, bool) or not isinstance(year, int):
+        raise ValueError(f"year must be an int, got {year!r}")
+    table = f"{sch}.{dt}_{year}"
+    return (
+        f"IF OBJECT_ID('{_lit(table)}', 'U') IS NOT NULL\n"
+        f"    TRUNCATE TABLE {table};\n"
+        f"IF OBJECT_ID('{_lit(sch)}._load_manifest', 'U') IS NOT NULL\n"
+        f"    DELETE FROM {sch}._load_manifest\n"
+        f"    WHERE data_type = '{_lit(dt)}' AND year = {year};"
+    )

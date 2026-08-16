@@ -227,3 +227,31 @@ def test_set_max_server_memory_rejects_a_bool():
     """bool is an int subclass, and `True` would render as the literal 1."""
     with pytest.raises(ValueError):
         sql.set_max_server_memory(True)
+
+
+def test_inconsistent_years_guards_a_missing_manifest():
+    out = sql.inconsistent_years("dbo", "fhvhv")
+    assert "OBJECT_ID('dbo._load_manifest', 'U') IS NULL" in out
+    assert r"tb.name LIKE 'fhvhv\_%' ESCAPE '\'" in out
+    # FULL OUTER: a year can have table rows and no manifest rows (a crashed
+    # load) or manifest rows and no table (a dropped table).
+    assert "FULL OUTER JOIN" in out
+
+
+def test_inconsistent_years_rejects_bad_identifiers():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.inconsistent_years("dbo", "fhvhv'; DROP TABLE x --")
+
+
+def test_reset_year_truncates_and_clears_the_manifest():
+    out = sql.reset_year("dbo", "fhvhv", 2019)
+    assert "TRUNCATE TABLE dbo.fhvhv_2019" in out
+    assert "OBJECT_ID('dbo.fhvhv_2019', 'U') IS NOT NULL" in out
+    assert "DELETE FROM dbo._load_manifest" in out
+    assert "data_type = 'fhvhv'" in out
+    assert "year = 2019" in out
+
+
+def test_reset_year_rejects_a_non_integer_year():
+    with pytest.raises(ValueError):
+        sql.reset_year("dbo", "fhvhv", "2019; DROP DATABASE taxi")
