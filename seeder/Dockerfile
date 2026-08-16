@@ -20,6 +20,11 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 ENV PATH="/opt/mssql-tools18/bin:${PATH}"
 
+# Child stdout is a pipe under `docker compose up`, so Python block-buffers it
+# and a progress line can sit unflushed for minutes. This applies to taxi-seed's
+# CLIs too -- they inherit the environment through stages.run.
+ENV PYTHONUNBUFFERED=1
+
 # Pristine mappings. preflight copies them onto the volume on first run and
 # never overwrites, so drift amendments survive the container.
 RUN mkdir -p /opt/taxi-seed/mappings \
