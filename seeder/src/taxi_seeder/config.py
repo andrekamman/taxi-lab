@@ -1,6 +1,7 @@
 """Environment -> Settings. Pure: no filesystem, no network, no database."""
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +9,21 @@ from pathlib import Path
 from taxi_seeder.sql import SqlIdentifierError, validate_identifier
 
 DATA_TYPES = ("yellow", "green", "fhv", "fhvhv")
+
+MAX_LOAD_WORKERS = 6
+
+
+def default_load_workers(cpu_count: int | None) -> int:
+    """Concurrent load streams to run when TAXI_LOAD_WORKERS is unset.
+
+    Each stream saturates about one SQL Server core (measured dop=1, 87%
+    on-CPU on 2026-08-15), so leave two cores for the OS, dockerd, and the
+    duckdb side of every stream. Capped at 6: beyond that the streams contend
+    for one buffer pool without adding throughput.
+    """
+    if not cpu_count or cpu_count < 3:
+        return 1
+    return min(MAX_LOAD_WORKERS, cpu_count - 2)
 
 
 class ConfigError(Exception):
@@ -31,6 +47,7 @@ class Settings:
     filegrowth_mb: int
     progress_interval_s: int
     mssql_max_memory_mb: int | None
+    load_workers: int
 
     @property
     def raw_normalized_dir(self) -> Path:
@@ -127,6 +144,10 @@ def from_env(env: Mapping[str, str]) -> Settings:
     if log_size_gb is not None and log_size_gb < 1:
         raise ConfigError(f"MSSQL_LOG_SIZE_GB must be >= 1, got {log_size_gb}")
 
+    load_workers = _int(env, "TAXI_LOAD_WORKERS", default_load_workers(os.cpu_count()))
+    if load_workers < 1:
+        raise ConfigError(f"TAXI_LOAD_WORKERS must be >= 1, got {load_workers}")
+
     max_mem_raw = (env.get("MSSQL_MAX_MEMORY_MB") or "").strip()
     mssql_max_memory_mb = _int(env, "MSSQL_MAX_MEMORY_MB", 0) if max_mem_raw else None
     if mssql_max_memory_mb is not None and mssql_max_memory_mb < 1024:
@@ -160,4 +181,5 @@ def from_env(env: Mapping[str, str]) -> Settings:
         filegrowth_mb=_int(env, "MSSQL_FILEGROWTH_MB", 1024),
         progress_interval_s=progress_interval_s,
         mssql_max_memory_mb=mssql_max_memory_mb,
+        load_workers=load_workers,
     )

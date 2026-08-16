@@ -1,6 +1,7 @@
 import pytest
 from pathlib import Path
 
+from taxi_seeder import config
 from taxi_seeder.config import ConfigError, Settings, from_env
 
 BASE = {"MSSQL_PASSWORD": "pw", "TAXI_DATA_DIR": "/data"}
@@ -134,3 +135,29 @@ def test_mssql_max_memory_rejects_below_the_floor():
 
 def test_mssql_max_memory_treats_empty_as_unset():
     assert from_env({**BASE, "MSSQL_MAX_MEMORY_MB": ""}).mssql_max_memory_mb is None
+
+
+@pytest.mark.parametrize("cpus,expected", [
+    (8, 6), (4, 2), (3, 1), (2, 1), (1, 1), (32, 6), (None, 1),
+])
+def test_default_load_workers(cpus, expected):
+    assert config.default_load_workers(cpus) == expected
+
+
+def test_load_workers_defaults_from_cpu_count(monkeypatch):
+    monkeypatch.setattr(config.os, "cpu_count", lambda: 8)
+    assert from_env(BASE).load_workers == 6
+
+
+def test_load_workers_can_be_pinned():
+    assert from_env({**BASE, "TAXI_LOAD_WORKERS": "3"}).load_workers == 3
+
+
+def test_load_workers_rejects_zero():
+    with pytest.raises(ConfigError, match="TAXI_LOAD_WORKERS"):
+        from_env({**BASE, "TAXI_LOAD_WORKERS": "0"})
+
+
+def test_load_workers_treats_empty_as_unset(monkeypatch):
+    monkeypatch.setattr(config.os, "cpu_count", lambda: 8)
+    assert from_env({**BASE, "TAXI_LOAD_WORKERS": ""}).load_workers == 6

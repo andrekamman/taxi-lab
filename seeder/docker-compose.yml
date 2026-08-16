@@ -77,6 +77,9 @@ services:
       # Cap for SQL Server's buffer pool. Unset -> derived from host RAM as
       # total - max(4 GB, 25%), applied with sp_configure before provisioning.
       MSSQL_MAX_MEMORY_MB: ${MSSQL_MAX_MEMORY_MB:-}
+      # Concurrent (trip type, year, month) load streams.
+      # Unset -> cpu_count - 2, capped at 6. 1 restores serial loading.
+      TAXI_LOAD_WORKERS: ${TAXI_LOAD_WORKERS:-}
       # Heartbeat cadence while a stage is inside a long subprocess. 0 disables.
       TAXI_PROGRESS_INTERVAL_S: ${TAXI_PROGRESS_INTERVAL_S:-}
     volumes:

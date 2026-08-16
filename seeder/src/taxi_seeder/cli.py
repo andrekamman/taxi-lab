@@ -53,6 +53,8 @@ environment variables:
   MSSQL_USER            SQL login (default: sa)
   MSSQL_MAX_MEMORY_MB   SQL Server 'max server memory' in MB (default:
                         host RAM minus the larger of 4 GB and 25%)
+  TAXI_LOAD_WORKERS     concurrent load streams (default: CPU count minus 2,
+                        capped at 6; 1 restores serial loading)
   TAXI_PROGRESS_INTERVAL_S
                         seconds between progress lines during mirror and load
                         (default: 60; 0 disables)

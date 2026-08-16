@@ -45,7 +45,8 @@ def test_help_documents_every_variable_the_config_reads(capsys):
                 "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB", "MSSQL_LOG_SIZE_GB",
                 "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT",
                 "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER",
-                "TAXI_PROGRESS_INTERVAL_S", "MSSQL_MAX_MEMORY_MB"):
+                "TAXI_PROGRESS_INTERVAL_S", "MSSQL_MAX_MEMORY_MB",
+                "TAXI_LOAD_WORKERS"):
         assert var in out
 
 
