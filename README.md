@@ -67,6 +67,41 @@ left watching the SQL Server log, with no signal that the run ended and no exit 
 The default run covers the complete data set: all four trip types, full history. Expect
 several hours and a large database on the first run. Later runs are incremental.
 
+#### Watching a run
+
+The command above runs in the foreground, which is what you want in CI: it is the form
+that gives you the exit code. For a multi-hour interactive run, start the stack detached
+and follow the logs instead. A foreground run is tied to your terminal — if the terminal
+dies the containers keep going, but you lose the output, and running `docker compose up` a
+second time **recreates the seeder and discards whatever it was loading**.
+
+```bash
+cd seeder
+docker compose up -d --build     # start detached
+docker compose logs -f seeder    # follow; Ctrl-C detaches, nothing is killed
+```
+
+The seeder announces every stage, and during mirror and load it prints a progress line
+every 60 seconds:
+
+```
+[07:12:56] mirror yellow: starting
+[07:13:56] mirror yellow: 37 files, 12 files/min, elapsed 1m00s
+[07:13:42] load fhvhv: starting (1.61B rows expected)
+[07:14:42] load fhvhv: 2.1M/1.61B rows (0.1%), 2.06M rows/min, elapsed 1m00s, eta 13h01m
+```
+
+Load progress is sampled from the tables themselves, so it keeps moving even inside the
+single multi-hour `COPY` a full year takes. Set `TAXI_PROGRESS_INTERVAL_S` in `.env` to
+change the cadence, or `0` to switch the heartbeat off.
+
+To check on a run from another shell without touching it:
+
+```bash
+docker compose ps
+docker compose logs --tail 20 seeder
+```
+
 See the [design spec](docs/specs/2026-08-01-seeder-container-design.md) for the
 configuration variables and the decisions behind them.
 
