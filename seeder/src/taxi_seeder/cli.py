@@ -10,9 +10,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from collections.abc import Iterable
 
-from taxi_seeder import backup, mssql, ola, preflight, provision, report, sql, stages
+from taxi_seeder import (backup, mssql, ola, preflight, progress, provision,
+                         report, sql, stages)
 from taxi_seeder.config import ConfigError, from_env
 
 CLEAN = 0
@@ -93,6 +95,41 @@ def load_exit_code(child_rc: int) -> int:
     return FAILURE if child_rc == NEEDS_REVIEW else child_rc
 
 
+def _stage(settings, label: str, fn, *, sample=None, total: int | None = None,
+           unit: str = "rows"):
+    """Announce a stage, heartbeat through it if it has a sampler, and say how
+    long it took and what it returned.
+
+    Returns whatever `fn` returns. Deliberately does not catch: main's existing
+    except block owns the error-to-exit-code mapping, and swallowing here would
+    change exit codes.
+
+    A stage with no sampler gets interval_s=0, which is the same switch
+    TAXI_PROGRESS_INTERVAL_S=0 throws: the Heartbeat starts no thread at all.
+    provision, ola, preflight and backup are minutes at most, and a start/done
+    pair is all they need.
+    """
+    hint = f" ({progress.humanize_count(total)} {unit} expected)" if total else ""
+    progress.emit(f"{label}: starting{hint}")
+
+    started = time.monotonic()
+    with progress.Heartbeat(
+        label,
+        sample if sample is not None else (lambda: None),
+        total=total,
+        unit=unit,
+        interval_s=settings.progress_interval_s if sample is not None else 0,
+    ):
+        result = fn()
+
+    elapsed = progress.humanize_duration(time.monotonic() - started)
+    # `type(result) is int` rather than isinstance: bool subclasses int, and
+    # provision and ola return True, which would print as "(exit True)".
+    suffix = f" (exit {result})" if type(result) is int else ""
+    progress.emit(f"{label}: done in {elapsed}{suffix}")
+    return result
+
+
 def main(argv=None) -> int:
     # parse_args() itself calls sys.exit(0) after printing help for -h/--help,
     # and sys.exit(2) after printing usage to stderr for an unrecognised
@@ -107,21 +144,34 @@ def main(argv=None) -> int:
 
     codes: list[int] = []
     try:
-        preflight.run(settings)
+        _stage(settings, "preflight", lambda: preflight.run(settings))
 
+        # The `dt=data_type` bindings below are load-bearing: without them every
+        # closure captures the loop variable and each stage reports the last
+        # trip type instead of its own.
         for data_type in settings.types:
-            rc = stages.mirror(settings, data_type)
+            rc = _stage(
+                settings, f"mirror {data_type}",
+                lambda dt=data_type: stages.mirror(settings, dt),
+                sample=lambda dt=data_type: progress.normalized_files(settings, dt),
+                unit="files",
+            )
             codes.append(rc)
             if rc != CLEAN:
                 print(f"{_halt_label(rc)}: mirror stage for {data_type} exited {rc}; "
                       f"stopping", file=sys.stderr)
                 return worst(codes)
 
-        provision.run(settings)
-        ola.run(settings)
+        _stage(settings, "provision", lambda: provision.run(settings))
+        _stage(settings, "ola", lambda: ola.run(settings))
 
         for data_type in settings.types:
-            child_rc = stages.load(settings, data_type)
+            child_rc = _stage(
+                settings, f"load {data_type}",
+                lambda dt=data_type: stages.load(settings, dt),
+                sample=lambda dt=data_type: report.table_rows(settings, dt),
+                total=progress.expected_rows(settings, data_type),
+            )
             rc = load_exit_code(child_rc)
             codes.append(rc)
             if rc != CLEAN:
@@ -131,7 +181,7 @@ def main(argv=None) -> int:
                       f"{child_rc}{detail}; stopping", file=sys.stderr)
                 return worst(codes)
 
-        backup.run(settings)
+        _stage(settings, "backup", lambda: backup.run(settings))
 
     except (mssql.MssqlError, sql.SqlIdentifierError, ola.OlaScriptMissingError,
             stages.StageCommandNotFoundError,

@@ -37,7 +37,8 @@ def test_help_documents_every_variable_the_config_reads(capsys):
     for var in ("TAXI_DATA_DIR", "MSSQL_PASSWORD", "TAXI_TYPES", "TAXI_RECENT",
                 "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB", "MSSQL_LOG_SIZE_GB",
                 "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT",
-                "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER"):
+                "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER",
+                "TAXI_PROGRESS_INTERVAL_S"):
         assert var in out
 
 
@@ -266,3 +267,166 @@ def test_main_maps_mssql_error_to_exit_2(monkeypatch, tmp_path, capsys):
     assert cli.main([]) == 2
     err = capsys.readouterr().err
     assert "connection refused" in err
+
+
+class _FakeHeartbeat:
+    """Records how cli.main wired each stage up, and runs no thread."""
+
+    calls: list = []
+
+    def __init__(self, label, sample, **kwargs):
+        self.label = label
+        self.sample = sample
+        self.kwargs = kwargs
+        _FakeHeartbeat.calls.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.fixture
+def recorded_heartbeats(monkeypatch):
+    _FakeHeartbeat.calls = []
+    monkeypatch.setattr(cli.progress, "Heartbeat", _FakeHeartbeat)
+    return _FakeHeartbeat.calls
+
+
+def _stub_a_clean_run(monkeypatch):
+    monkeypatch.setattr(preflight, "run", lambda settings, **kw: None)
+    monkeypatch.setattr(stages, "mirror", lambda settings, data_type, **kw: 0)
+    monkeypatch.setattr(provision, "run", lambda settings, **kw: True)
+    monkeypatch.setattr(ola, "run", lambda settings, **kw: True)
+    monkeypatch.setattr(stages, "load", lambda settings, data_type, **kw: 0)
+    monkeypatch.setattr(backup, "run", lambda settings, **kw: True)
+    monkeypatch.setattr(backup, "newest_backup", lambda settings: None)
+    monkeypatch.setattr(report, "loaded_rows", lambda settings, **kw: {})
+
+
+def test_main_announces_every_stage(monkeypatch, tmp_path, capsys):
+    """The complaint this whole feature answers: a run that says nothing for
+    seven hours is indistinguishable from a hung one."""
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+
+    assert cli.main([]) == 0
+
+    out = capsys.readouterr().out
+    for expected in ("preflight: starting", "preflight: done in",
+                     "mirror green: starting", "mirror green: done in",
+                     "provision: starting", "ola: starting",
+                     "load green: starting", "load green: done in",
+                     "backup: starting", "backup: done in"):
+        assert expected in out, expected
+
+
+def test_every_announcement_carries_a_utc_timestamp(monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+
+    cli.main([])
+
+    stage_lines = [line for line in capsys.readouterr().out.splitlines()
+                   if ": starting" in line or ": done in" in line]
+    assert stage_lines
+    for line in stage_lines:
+        assert line.startswith("[") and line[9] == "]", line
+
+
+def test_a_stage_returning_true_is_not_reported_as_exit_true(
+        monkeypatch, tmp_path, capsys):
+    """bool is an int subclass; provision and ola return True, and "(exit True)"
+    reads as though a stage returned a bogus exit code."""
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+
+    cli.main([])
+
+    out = capsys.readouterr().out
+    assert "exit True" not in out
+    assert "mirror green: done in 0s (exit 0)" in out
+
+
+def test_main_announces_a_failing_stage_and_still_returns_its_code(
+        monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    monkeypatch.setattr(preflight, "run", lambda settings, **kw: None)
+    monkeypatch.setattr(stages, "mirror", lambda settings, data_type, **kw: 2)
+    monkeypatch.setattr(provision, "run", _never_called("provision.run"))
+
+    assert cli.main([]) == 2
+
+    captured = capsys.readouterr()
+    assert "mirror green: starting" in captured.out
+    assert "mirror green: done in 0s (exit 2)" in captured.out
+    assert "error:" in captured.err
+
+
+def test_main_heartbeats_mirror_and_load_but_not_the_short_stages(
+        monkeypatch, tmp_path, recorded_heartbeats):
+    _base_env(monkeypatch, tmp_path, "green")
+    _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.progress, "expected_rows",
+                        lambda settings, data_type, **kw: 1_607_275_004)
+
+    assert cli.main([]) == 0
+
+    beating = {hb.label: hb.kwargs for hb in recorded_heartbeats
+               if hb.kwargs["interval_s"] > 0}
+    assert set(beating) == {"mirror green", "load green"}
+    assert beating["mirror green"]["unit"] == "files"
+    assert beating["mirror green"]["total"] is None
+    assert beating["load green"]["unit"] == "rows"
+    assert beating["load green"]["total"] == 1_607_275_004
+
+
+def test_the_load_announcement_names_the_expected_total(
+        monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.progress, "expected_rows",
+                        lambda settings, data_type, **kw: 1_607_275_004)
+
+    cli.main([])
+
+    assert "load green: starting (1.61B rows expected)" in capsys.readouterr().out
+
+
+def test_each_heartbeat_samples_its_own_trip_type(
+        monkeypatch, tmp_path, recorded_heartbeats):
+    """Without a default-argument binding, every closure captures the loop
+    variable and all four heartbeats report the last trip type."""
+    _base_env(monkeypatch, tmp_path, "yellow,green")
+    _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.progress, "expected_rows",
+                        lambda settings, data_type, **kw: None)
+    monkeypatch.setattr(cli.progress, "normalized_files",
+                        lambda settings, data_type: {"yellow": 11, "green": 22}[data_type])
+    monkeypatch.setattr(report, "table_rows",
+                        lambda settings, data_type, **kw: {"yellow": 33, "green": 44}[data_type])
+
+    assert cli.main([]) == 0
+
+    sampled = {hb.label: hb.sample() for hb in recorded_heartbeats
+               if hb.kwargs["interval_s"] > 0}
+    assert sampled == {
+        "mirror yellow": 11, "mirror green": 22,
+        "load yellow": 33, "load green": 44,
+    }
+
+
+def test_a_heartbeat_is_not_started_when_the_interval_is_zero(
+        monkeypatch, tmp_path, recorded_heartbeats):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+
+    assert cli.main([]) == 0
+    assert all(hb.kwargs["interval_s"] == 0 for hb in recorded_heartbeats)
