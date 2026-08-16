@@ -29,6 +29,7 @@ class Settings:
     data_size_gb: int | None
     log_size_gb: int | None
     filegrowth_mb: int
+    progress_interval_s: int
 
     @property
     def raw_normalized_dir(self) -> Path:
@@ -125,6 +126,13 @@ def from_env(env: Mapping[str, str]) -> Settings:
     if log_size_gb is not None and log_size_gb < 1:
         raise ConfigError(f"MSSQL_LOG_SIZE_GB must be >= 1, got {log_size_gb}")
 
+    progress_interval_s = _int(env, "TAXI_PROGRESS_INTERVAL_S", 60)
+    if progress_interval_s < 0:
+        raise ConfigError(
+            f"TAXI_PROGRESS_INTERVAL_S must be >= 0 (0 disables the heartbeat), "
+            f"got {progress_interval_s}"
+        )
+
     return Settings(
         data_dir=Path(env.get("TAXI_DATA_DIR") or "/data"),
         types=_types(env.get("TAXI_TYPES") or ",".join(DATA_TYPES)),
@@ -142,4 +150,5 @@ def from_env(env: Mapping[str, str]) -> Settings:
         data_size_gb=data_size_gb,
         log_size_gb=log_size_gb,
         filegrowth_mb=_int(env, "MSSQL_FILEGROWTH_MB", 1024),
+        progress_interval_s=progress_interval_s,
     )

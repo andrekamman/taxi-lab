@@ -49,6 +49,9 @@ environment variables:
   MSSQL_SCHEMA          schema holding the loaded tables (default: dbo); same
                         identifier rule
   MSSQL_USER            SQL login (default: sa)
+  TAXI_PROGRESS_INTERVAL_S
+                        seconds between progress lines during mirror and load
+                        (default: 60; 0 disables)
 """
 
 

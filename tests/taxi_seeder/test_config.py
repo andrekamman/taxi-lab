@@ -100,3 +100,20 @@ def test_derived_paths():
     assert s.mdf_path == Path("/data/mssql/data/taxi.mdf")
     assert s.ldf_path == Path("/data/mssql/log/taxi_log.ldf")
     assert s.backup_dir == Path("/data/mssql/backup")
+
+
+def test_progress_interval_defaults_to_60():
+    assert from_env(BASE).progress_interval_s == 60
+
+
+def test_progress_interval_can_be_disabled():
+    assert from_env({**BASE, "TAXI_PROGRESS_INTERVAL_S": "0"}).progress_interval_s == 0
+
+
+def test_progress_interval_rejects_a_negative():
+    with pytest.raises(ConfigError, match="TAXI_PROGRESS_INTERVAL_S"):
+        from_env({**BASE, "TAXI_PROGRESS_INTERVAL_S": "-1"})
+
+
+def test_progress_interval_treats_empty_as_unset():
+    assert from_env({**BASE, "TAXI_PROGRESS_INTERVAL_S": ""}).progress_interval_s == 60

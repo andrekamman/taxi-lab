@@ -74,6 +74,8 @@ services:
       MSSQL_DATABASE: ${MSSQL_DATABASE:-}
       MSSQL_SCHEMA: ${MSSQL_SCHEMA:-}
       MSSQL_USER: ${MSSQL_USER:-}
+      # Heartbeat cadence while a stage is inside a long subprocess. 0 disables.
+      TAXI_PROGRESS_INTERVAL_S: ${TAXI_PROGRESS_INTERVAL_S:-}
     volumes:
       - ${TAXI_DATA_DIR}:/data
     working_dir: /data
