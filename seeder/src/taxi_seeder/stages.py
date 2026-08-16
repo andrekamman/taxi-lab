@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from taxi_seeder.config import Settings
+from taxi_seeder.shards import Shard
 
 
 class StageCommandNotFoundError(Exception):
@@ -28,8 +31,9 @@ def mirror_cmd(settings: Settings, data_type: str) -> list[str]:
     return cmd
 
 
-def load_cmd(settings: Settings, data_type: str) -> list[str]:
-    return [
+def load_cmd(settings: Settings, data_type: str, *, year: int | None = None,
+             month: int | None = None) -> list[str]:
+    cmd = [
         "taxi-load", data_type,
         "--data-dir", str(settings.data_dir),
         "--host", settings.host,
@@ -38,6 +42,11 @@ def load_cmd(settings: Settings, data_type: str) -> list[str]:
         "--schema", settings.schema,
         "--user", settings.user,
     ]
+    if year is not None:
+        cmd += ["--year", str(year)]
+    if month is not None:
+        cmd += ["--month", str(month)]
+    return cmd
 
 
 def run(cmd: list[str], settings: Settings, *, runner=None) -> int:
@@ -66,3 +75,43 @@ def mirror(settings: Settings, data_type: str, *, runner=None) -> int:
 
 def load(settings: Settings, data_type: str, *, runner=None) -> int:
     return run(load_cmd(settings, data_type), settings, runner=runner)
+
+
+def load_shard(settings: Settings, shard: Shard, *, runner=None) -> int:
+    return run(load_cmd(settings, shard.data_type, year=shard.year,
+                        month=shard.month), settings, runner=runner)
+
+
+def load_concurrent(settings: Settings, items, *, workers: int,
+                    runner=None, on_done=None) -> list[tuple[Shard, int]]:
+    """Load every shard with at most `workers` concurrent taxi-load processes.
+
+    Threads here only supervise subprocesses -- they block in subprocess.run and
+    release the GIL. The parallelism is process-level, which is forced: the
+    duckdb mssql extension keeps its ATTACH context process-global, so two loads
+    in one process would collide on it.
+
+    A shard that raises is recorded as exit 2 rather than propagated, so one bad
+    month cannot abandon its siblings. The next run's integrity pre-pass resets
+    whatever year was left half-loaded.
+    """
+    if not items:
+        return []
+
+    def one(shard: Shard) -> tuple[Shard, int]:
+        try:
+            rc = load_shard(settings, shard, runner=runner)
+        except StageCommandNotFoundError:
+            # Not a shard problem: every shard would hit it, and cli.main
+            # already maps it to exit 2 with an actionable message.
+            raise
+        except Exception as e:                       # noqa: BLE001 -- see docstring
+            print(f"error: load stage for {shard.label} crashed: {e}",
+                  file=sys.stderr)
+            rc = 2
+        if on_done is not None:
+            on_done(shard, rc)
+        return shard, rc
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        return list(pool.map(one, items))
