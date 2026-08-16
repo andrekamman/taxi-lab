@@ -1,6 +1,7 @@
 import pytest
 
-from taxi_seeder import backup, cli, mssql, ola, preflight, provision, report, stages
+from taxi_seeder import (backup, cli, mssql, ola, preflight, provision, report,
+                         shards, stages)
 
 
 @pytest.fixture(autouse=True)
@@ -114,10 +115,17 @@ def test_main_runs_the_seven_steps_in_order(monkeypatch, tmp_path):
         return True
     monkeypatch.setattr(ola, "run", fake_ola)
 
-    def fake_load(settings, data_type, **kw):
-        calls.append(("load", data_type))
-        return 0
-    monkeypatch.setattr(stages, "load", fake_load)
+    monkeypatch.setattr(shards, "discover", lambda s, **kw: [
+        shards.Shard("yellow", 2025, 1, 10), shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(preflight, "require_month_support", lambda **kw: None)
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: [])
+    monkeypatch.setattr(cli.progress, "expected_rows_total", lambda s, ty, **kw: None)
+
+    def fake_load_concurrent(settings, items, **kw):
+        calls.append(("load", tuple(s.data_type for s in items)))
+        return [(s, 0) for s in items]
+    monkeypatch.setattr(stages, "load_concurrent", fake_load_concurrent)
 
     def fake_backup(settings, **kw):
         calls.append("backup")
@@ -134,7 +142,8 @@ def test_main_runs_the_seven_steps_in_order(monkeypatch, tmp_path):
         ("mirror", "yellow"), ("mirror", "green"),
         "provision",
         "ola",
-        ("load", "yellow"), ("load", "green"),
+        # One fan-out over every shard, not a stage per trip type.
+        ("load", ("green", "yellow")),
         "backup",
     ]
 
@@ -186,20 +195,29 @@ def test_main_stops_after_load_fails_and_never_backs_up(monkeypatch, tmp_path, c
         return True
     monkeypatch.setattr(ola, "run", fake_ola)
 
-    def fake_load(settings, data_type, **kw):
-        calls.append(("load", data_type))
-        return 2 if data_type == "yellow" else 0
-    monkeypatch.setattr(stages, "load", fake_load)
+    monkeypatch.setattr(shards, "discover", lambda s, **kw: [
+        shards.Shard("yellow", 2025, 1, 10), shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(preflight, "require_month_support", lambda **kw: None)
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: [])
+    monkeypatch.setattr(cli.progress, "expected_rows_total", lambda s, ty, **kw: None)
+
+    def fake_load_concurrent(settings, items, **kw):
+        calls.append("load")
+        # Fan-out cannot halt on the first failure -- every shard finishes.
+        return [(s, 2 if s.data_type == "yellow" else 0) for s in items]
+    monkeypatch.setattr(stages, "load_concurrent", fake_load_concurrent)
 
     monkeypatch.setattr(backup, "run", _never_called("backup.run"))
 
     assert cli.main([]) == 2
     assert calls == [
         "preflight", ("mirror", "yellow"), ("mirror", "green"),
-        "provision", "ola", ("load", "yellow"),
+        "provision", "ola", "load",
     ]
     err = capsys.readouterr().err
     assert "error:" in err
+    assert "skipping backup" in err
 
 
 def test_main_maps_a_mid_load_failure_to_exit_2(monkeypatch, tmp_path, capsys):
@@ -212,7 +230,14 @@ def test_main_maps_a_mid_load_failure_to_exit_2(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(stages, "mirror", lambda settings, data_type, **kw: 0)
     monkeypatch.setattr(provision, "run", lambda settings, **kw: True)
     monkeypatch.setattr(ola, "run", lambda settings, **kw: True)
-    monkeypatch.setattr(stages, "load", lambda settings, data_type, **kw: 1)
+    monkeypatch.setattr(shards, "discover",
+                        lambda s, **kw: [shards.Shard("yellow", 2025, 1, 10)])
+    monkeypatch.setattr(preflight, "require_month_support", lambda **kw: None)
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: [])
+    monkeypatch.setattr(cli.progress, "expected_rows_total", lambda s, ty, **kw: None)
+    monkeypatch.setattr(stages, "load_concurrent",
+                        lambda settings, items, **kw: [(s, 1) for s in items])
     monkeypatch.setattr(backup, "run", _never_called("backup.run"))
 
     assert cli.main([]) == 2
@@ -304,10 +329,14 @@ def recorded_heartbeats(monkeypatch):
 
 def _stub_a_clean_run(monkeypatch):
     monkeypatch.setattr(preflight, "run", lambda settings, **kw: None)
+    monkeypatch.setattr(preflight, "require_month_support", lambda **kw: None)
     monkeypatch.setattr(stages, "mirror", lambda settings, data_type, **kw: 0)
     monkeypatch.setattr(provision, "run", lambda settings, **kw: True)
     monkeypatch.setattr(ola, "run", lambda settings, **kw: True)
-    monkeypatch.setattr(stages, "load", lambda settings, data_type, **kw: 0)
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: [])
+    monkeypatch.setattr(stages, "load_concurrent",
+                        lambda settings, items, **kw: [(s, 0) for s in items])
     monkeypatch.setattr(backup, "run", lambda settings, **kw: True)
     monkeypatch.setattr(backup, "newest_backup", lambda settings: None)
     monkeypatch.setattr(report, "loaded_rows", lambda settings, **kw: {})
@@ -319,6 +348,9 @@ def test_main_announces_every_stage(monkeypatch, tmp_path, capsys):
     _base_env(monkeypatch, tmp_path, "green")
     monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
     _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.shards, "discover",
+                        lambda s, **kw: [shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(cli.progress, "expected_rows_total", lambda s, ty, **kw: None)
 
     assert cli.main([]) == 0
 
@@ -326,7 +358,7 @@ def test_main_announces_every_stage(monkeypatch, tmp_path, capsys):
     for expected in ("preflight: starting", "preflight: done in",
                      "mirror green: starting", "mirror green: done in",
                      "provision: starting", "ola: starting",
-                     "load green: starting", "load green: done in",
+                     "load: starting", "load: done in",
                      "backup: starting", "backup: done in"):
         assert expected in out, expected
 
@@ -380,18 +412,21 @@ def test_main_heartbeats_mirror_and_load_but_not_the_short_stages(
         monkeypatch, tmp_path, recorded_heartbeats):
     _base_env(monkeypatch, tmp_path, "green")
     _stub_a_clean_run(monkeypatch)
-    monkeypatch.setattr(cli.progress, "expected_rows",
-                        lambda settings, data_type, **kw: 1_607_275_004)
+    monkeypatch.setattr(cli.shards, "discover",
+                        lambda s, **kw: [shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(cli.progress, "expected_rows_total",
+                        lambda settings, types, **kw: 1_607_275_004)
 
     assert cli.main([]) == 0
 
     beating = {hb.label: hb.kwargs for hb in recorded_heartbeats
                if hb.kwargs["interval_s"] > 0}
-    assert set(beating) == {"mirror green", "load green"}
+    # Mirror is still per trip type; load is one stage over the whole fan-out.
+    assert set(beating) == {"mirror green", "load"}
     assert beating["mirror green"]["unit"] == "files"
     assert beating["mirror green"]["total"] is None
-    assert beating["load green"]["unit"] == "rows"
-    assert beating["load green"]["total"] == 1_607_275_004
+    assert beating["load"]["unit"] == "rows"
+    assert beating["load"]["total"] == 1_607_275_004
 
 
 def test_the_load_announcement_names_the_expected_total(
@@ -399,35 +434,37 @@ def test_the_load_announcement_names_the_expected_total(
     _base_env(monkeypatch, tmp_path, "green")
     monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
     _stub_a_clean_run(monkeypatch)
-    monkeypatch.setattr(cli.progress, "expected_rows",
-                        lambda settings, data_type, **kw: 1_607_275_004)
+    monkeypatch.setattr(cli.shards, "discover",
+                        lambda s, **kw: [shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(cli.progress, "expected_rows_total",
+                        lambda settings, types, **kw: 1_607_275_004)
 
     cli.main([])
 
-    assert "load green: starting (1.61B rows expected)" in capsys.readouterr().out
+    assert "load: starting (1.61B rows expected)" in capsys.readouterr().out
 
 
-def test_each_heartbeat_samples_its_own_trip_type(
+def test_each_mirror_heartbeat_samples_its_own_trip_type(
         monkeypatch, tmp_path, recorded_heartbeats):
     """Without a default-argument binding, every closure captures the loop
-    variable and all four heartbeats report the last trip type."""
+    variable and both mirror heartbeats report the last trip type."""
     _base_env(monkeypatch, tmp_path, "yellow,green")
     _stub_a_clean_run(monkeypatch)
-    monkeypatch.setattr(cli.progress, "expected_rows",
-                        lambda settings, data_type, **kw: None)
+    monkeypatch.setattr(cli.shards, "discover",
+                        lambda s, **kw: [shards.Shard("green", 2025, 1, 10)])
+    monkeypatch.setattr(cli.progress, "expected_rows_total",
+                        lambda settings, types, **kw: None)
     monkeypatch.setattr(cli.progress, "normalized_files",
                         lambda settings, data_type: {"yellow": 11, "green": 22}[data_type])
-    monkeypatch.setattr(report, "table_rows",
-                        lambda settings, data_type, **kw: {"yellow": 33, "green": 44}[data_type])
+    monkeypatch.setattr(report, "table_rows_total",
+                        lambda settings, types, **kw: 77)
 
     assert cli.main([]) == 0
 
     sampled = {hb.label: hb.sample() for hb in recorded_heartbeats
                if hb.kwargs["interval_s"] > 0}
-    assert sampled == {
-        "mirror yellow": 11, "mirror green": 22,
-        "load yellow": 33, "load green": 44,
-    }
+    # Load is one fan-out, so its sample is the total across every type.
+    assert sampled == {"mirror yellow": 11, "mirror green": 22, "load": 77}
 
 
 def test_a_heartbeat_is_not_started_when_the_interval_is_zero(
@@ -455,3 +492,148 @@ def test_main_applies_the_memory_cap_before_provisioning(
     assert cli.main([]) == 0
     assert calls == ["memory", "provision"]
     assert "memory: starting" in capsys.readouterr().out
+
+
+# --- month-shard fan-out ---------------------------------------------------
+
+def _stub_for_fanout(monkeypatch, items, load_result=None):
+    _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.preflight, "require_month_support", lambda **kw: None)
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: [])
+    monkeypatch.setattr(cli.shards, "discover", lambda s, **kw: list(items))
+    monkeypatch.setattr(cli.progress, "expected_rows_total", lambda s, t, **kw: None)
+    monkeypatch.setattr(cli.report, "table_rows_total", lambda s, t, **kw: 0)
+    if load_result is not None:
+        monkeypatch.setattr(cli.stages, "load_concurrent", load_result)
+
+
+def test_main_runs_the_pre_pass_before_fanning_out(monkeypatch, tmp_path):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    calls = []
+    items = [shards.Shard("green", 2025, m, 10) for m in (1, 2)]
+    _stub_for_fanout(monkeypatch, items,
+                     load_result=lambda s, it, **kw: calls.append("fanout")
+                     or [(x, 0) for x in it])
+    monkeypatch.setattr(cli.integrity, "reset_inconsistent_years",
+                        lambda s, it, **kw: calls.append("pre-pass") or [])
+
+    assert cli.main([]) == 0
+    assert calls == ["pre-pass", "fanout"]
+
+
+def test_main_fans_out_in_year_major_order(monkeypatch, tmp_path):
+    _base_env(monkeypatch, tmp_path, "green,fhvhv")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    seen = {}
+    items = [shards.Shard("green", 2025, 1, 10), shards.Shard("fhvhv", 2019, 1, 900)]
+    def record_order(settings, it, **kw):
+        seen["order"] = [x.label for x in it]
+        return [(x, 0) for x in it]
+
+    _stub_for_fanout(monkeypatch, items, load_result=record_order)
+
+    assert cli.main([]) == 0
+    assert seen["order"] == ["fhvhv 2019-01", "green 2025-01"]
+
+
+def test_main_passes_the_configured_worker_count(monkeypatch, tmp_path):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    monkeypatch.setenv("TAXI_LOAD_WORKERS", "4")
+    seen = {}
+    items = [shards.Shard("green", 2025, 1, 10)]
+    def record_kwargs(settings, it, **kw):
+        seen.update(kw)
+        return [(x, 0) for x in it]
+
+    _stub_for_fanout(monkeypatch, items, load_result=record_kwargs)
+
+    assert cli.main([]) == 0
+    assert seen["workers"] == 4
+
+
+def test_main_returns_the_worst_shard_code(monkeypatch, tmp_path):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    items = [shards.Shard("green", 2025, 1, 10)]
+    _stub_for_fanout(monkeypatch, items,
+                     load_result=lambda s, it, **kw: [(x, 1) for x in it])
+
+    # taxi-load's 1 means "failed mid-load", which load_exit_code maps to 2.
+    assert cli.main([]) == 2
+
+
+def test_main_skips_the_backup_when_a_shard_failed(monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    backed_up = []
+    items = [shards.Shard("green", 2025, 1, 10)]
+    _stub_for_fanout(monkeypatch, items,
+                     load_result=lambda s, it, **kw: [(x, 2) for x in it])
+    monkeypatch.setattr(backup, "run", lambda s, **kw: backed_up.append(1))
+
+    assert cli.main([]) == 2
+    assert backed_up == []
+    assert "skipping backup" in capsys.readouterr().err
+
+
+def test_main_backs_up_when_there_is_nothing_to_load(monkeypatch, tmp_path):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    backed_up = []
+    _stub_for_fanout(monkeypatch, [], load_result=lambda s, it, **kw: [])
+    monkeypatch.setattr(backup, "run", lambda s, **kw: backed_up.append(1))
+
+    assert cli.main([]) == 0
+    assert backed_up == [1]
+
+
+def test_main_reports_every_failed_shard_not_just_the_first(
+        monkeypatch, tmp_path, capsys):
+    """Fan-out cannot halt, so the operator needs the whole list."""
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    items = [shards.Shard("green", 2025, m, 10) for m in (1, 2, 3)]
+    _stub_for_fanout(monkeypatch, items,
+                     load_result=lambda s, it, **kw:
+                     [(x, 2 if x.month != 2 else 0) for x in it])
+
+    assert cli.main([]) == 2
+    err = capsys.readouterr().err
+    assert "green 2025-01" in err and "green 2025-03" in err
+
+
+def test_main_announces_each_finished_shard(monkeypatch, tmp_path, capsys):
+    """The observability win month shards were chosen for."""
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    items = [shards.Shard("green", 2025, 1, 10)]
+
+    def fake_load_concurrent(settings, it, *, workers, on_done=None, **kw):
+        for shard in it:
+            on_done(shard, 0)
+        return [(x, 0) for x in it]
+
+    _stub_for_fanout(monkeypatch, items, load_result=fake_load_concurrent)
+
+    assert cli.main([]) == 0
+    assert "green 2025-01: done (exit 0)" in capsys.readouterr().out
+
+
+def test_main_refuses_to_fan_out_against_an_old_taxi_load(
+        monkeypatch, tmp_path, capsys):
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+    monkeypatch.setattr(cli.shards, "discover",
+                        lambda s, **kw: [shards.Shard("green", 2025, 1, 10)])
+
+    def too_old(**kw):
+        raise cli.preflight.TaxiLoadTooOldError("no --month option")
+
+    monkeypatch.setattr(cli.preflight, "require_month_support", too_old)
+
+    assert cli.main([]) == 2
+    assert "no --month option" in capsys.readouterr().err

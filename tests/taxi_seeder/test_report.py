@@ -99,3 +99,32 @@ def test_table_rows_returns_none_for_a_non_numeric_answer(tmp_path):
         return subprocess.CompletedProcess(cmd, 0, "NULL\n", "")
 
     assert report.table_rows(settings_for(tmp_path), "fhvhv", runner=runner) is None
+
+
+def test_table_rows_total_sums_every_trip_type(tmp_path):
+    import subprocess
+
+    def runner(cmd, env, stdin_text):
+        return subprocess.CompletedProcess(cmd, 0, "100\n")
+
+    s = settings_for(tmp_path, TAXI_TYPES="yellow,green")
+    assert report.table_rows_total(s, s.types, runner=runner) == 200
+
+
+def test_table_rows_total_is_none_when_any_part_is_unknown(tmp_path):
+    """The heartbeat's rule: a partial sum would be a wrong number, not a
+    smaller one."""
+    import subprocess
+
+    seen = []
+
+    def runner(cmd, env, stdin_text):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, len(seen) - 1, "100\n")
+
+    s = settings_for(tmp_path, TAXI_TYPES="yellow,green")
+    assert report.table_rows_total(s, s.types, runner=runner) is None
+
+
+def test_table_rows_total_of_no_types(tmp_path):
+    assert report.table_rows_total(settings_for(tmp_path), (), runner=None) is None

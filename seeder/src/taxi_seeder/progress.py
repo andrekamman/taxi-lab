@@ -223,3 +223,20 @@ class Heartbeat:
                             unit=self._unit),
             now=self._stamp(), out=self._out,
         )
+
+
+def expected_rows_total(settings: Settings, data_types, *, reader=None) -> int | None:
+    """Expected rows across every selected trip type, or None if any is unknown.
+
+    The load phase is one fan-out over every type at once, so its percentage and
+    ETA are computed against this rather than one type's total.
+    """
+    total = 0
+    seen = False
+    for data_type in data_types:
+        rows = expected_rows(settings, data_type, reader=reader)
+        if rows is None:
+            return None
+        total += rows
+        seen = True
+    return total if seen else None

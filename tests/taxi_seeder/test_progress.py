@@ -271,3 +271,22 @@ def test_heartbeat_does_not_swallow_the_body_exception():
         with progress.Heartbeat("load fhvhv", lambda: 1, interval_s=0,
                                 out=lambda m: None):
             raise ValueError("the stage blew up")
+
+
+def test_expected_rows_total_sums_every_trip_type(tmp_path):
+    _normalized(tmp_path, "fhvhv_tripdata_2019-02.parquet")
+    _normalized(tmp_path, "green_tripdata_2025-01.parquet", data_type="green",
+                year="2025")
+    s = settings_for(tmp_path, TAXI_TYPES="green,fhvhv")
+    assert progress.expected_rows_total(s, s.types, reader=lambda p: 50) == 100
+
+
+def test_expected_rows_total_is_none_when_a_type_is_unknown(tmp_path):
+    _normalized(tmp_path, "fhvhv_tripdata_2019-02.parquet")
+    s = settings_for(tmp_path, TAXI_TYPES="green,fhvhv")
+    # green has nothing normalized yet, so the total is not knowable.
+    assert progress.expected_rows_total(s, s.types, reader=lambda p: 50) is None
+
+
+def test_expected_rows_total_of_no_types(tmp_path):
+    assert progress.expected_rows_total(settings_for(tmp_path), ()) is None

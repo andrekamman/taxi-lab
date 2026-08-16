@@ -4,6 +4,11 @@ Exit codes mirror taxi-seed: 0 clean, 1 needs-review, 2 operational failure.
 A step that returns 1 or 2 stops the run -- no type is loaded whose normalize
 halted, and no database is backed up whose load failed. Partial progress is
 always safe because every step resumes from an observable.
+
+The load step is the one exception to "stops the run": it fans out across
+month shards, so by the time one fails its siblings are already in flight.
+Every dispatched shard finishes, every failure is reported, the worst code
+wins, and the backup is skipped unless everything was clean.
 """
 from __future__ import annotations
 
@@ -13,8 +18,8 @@ import sys
 import time
 from collections.abc import Iterable
 
-from taxi_seeder import (backup, mssql, ola, preflight, progress, provision,
-                         report, sql, stages)
+from taxi_seeder import (backup, integrity, mssql, ola, preflight, progress,
+                         provision, report, shards, sql, stages)
 from taxi_seeder.config import ConfigError, from_env
 
 CLEAN = 0
@@ -99,6 +104,12 @@ def load_exit_code(child_rc: int) -> int:
     return FAILURE if child_rc == NEEDS_REVIEW else child_rc
 
 
+def _announce_shard(shard, rc: int) -> None:
+    """One stamped line per finished month. This is the observability win month
+    shards were chosen for -- an event every few minutes, not hours of silence."""
+    progress.emit(f"{shard.label}: done (exit {rc})")
+
+
 def _stage(settings, label: str, fn, *, sample=None, total: int | None = None,
            unit: str = "rows"):
     """Announce a stage, heartbeat through it if it has a sampler, and say how
@@ -170,26 +181,46 @@ def main(argv=None) -> int:
         _stage(settings, "provision", lambda: provision.run(settings))
         _stage(settings, "ola", lambda: ola.run(settings))
 
-        for data_type in settings.types:
-            child_rc = _stage(
-                settings, f"load {data_type}",
-                lambda dt=data_type: stages.load(settings, dt),
-                sample=lambda dt=data_type: report.table_rows(settings, dt),
-                total=progress.expected_rows(settings, data_type),
+        found = shards.order(shards.discover(settings))
+        if found:
+            preflight.require_month_support()
+            print(f"load: {len(found)} month shard(s) across "
+                  f"{len(shards.years(found))} year table(s), "
+                  f"{settings.load_workers} worker(s)")
+
+            # Serial, and first: this is the only component allowed to truncate,
+            # and it must finish before any worker opens a bulk stream into a
+            # table it might reset. After it, every shard is a clean append.
+            integrity.reset_inconsistent_years(settings, found)
+
+            results = _stage(
+                settings, "load",
+                lambda: stages.load_concurrent(
+                    settings, found, workers=settings.load_workers,
+                    on_done=_announce_shard),
+                sample=lambda: report.table_rows_total(settings, settings.types),
+                total=progress.expected_rows_total(settings, settings.types),
             )
-            rc = load_exit_code(child_rc)
-            codes.append(rc)
-            if rc != CLEAN:
-                detail = (" (failed mid-load -- re-running resumes from the "
-                          "manifest)" if rc != child_rc else "")
-                print(f"{_halt_label(rc)}: load stage for {data_type} exited "
-                      f"{child_rc}{detail}; stopping", file=sys.stderr)
-                return worst(codes)
+
+            # No early return: the siblings of a failed shard are already
+            # running, so every failure is reported and the worst code wins.
+            for shard, child_rc in results:
+                rc = load_exit_code(child_rc)
+                codes.append(rc)
+                if rc != CLEAN:
+                    print(f"{_halt_label(rc)}: load stage for {shard.label} "
+                          f"exited {child_rc} (re-running resumes from the "
+                          f"manifest)", file=sys.stderr)
+
+        if worst(codes) != CLEAN:
+            print("error: one or more load shards failed; skipping backup",
+                  file=sys.stderr)
+            return worst(codes)
 
         _stage(settings, "backup", lambda: backup.run(settings))
 
     except (mssql.MssqlError, sql.SqlIdentifierError, ola.OlaScriptMissingError,
-            stages.StageCommandNotFoundError,
+            stages.StageCommandNotFoundError, preflight.TaxiLoadTooOldError,
             provision.InsufficientDiskSpaceError) as e:
         print(f"error: {e}", file=sys.stderr)
         return FAILURE

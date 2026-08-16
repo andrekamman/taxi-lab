@@ -2,12 +2,47 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 from taxi_seeder import mssql
 from taxi_seeder.config import DATA_TYPES, Settings
 
 BAKED_MAPPINGS_DIR = Path("/opt/taxi-seed/mappings")
+
+
+class TaxiLoadTooOldError(Exception):
+    """The installed taxi-load predates --month. Maps to exit code 2."""
+
+
+def _default_helper(cmd):
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
+def taxi_load_supports_months(*, helper=None) -> bool:
+    """Whether the installed taxi-load can load a single (year, month).
+
+    Asked once, from the help text, because the alternative is discovering it
+    once per shard as an argparse error after the fan-out has already started.
+    """
+    helper = helper or _default_helper
+    try:
+        proc = helper(["taxi-load", "--help"])
+    except OSError:
+        return False
+    return "--month" in (proc.stdout or "") + (proc.stderr or "")
+
+
+def require_month_support(*, helper=None) -> None:
+    """Fail fast, and say what to do about it."""
+    if taxi_load_supports_months(helper=helper):
+        return None
+    raise TaxiLoadTooOldError(
+        "the installed taxi-load has no --month option, so the loader cannot "
+        "fan out across month shards. Install a taxi-seed release that "
+        "includes --year/--month (and rebuild the seeder image), or pin the "
+        "seeder to a revision that loads serially."
+    )
 
 
 def ensure_directories(settings: Settings) -> None:

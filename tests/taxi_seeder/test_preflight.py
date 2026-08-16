@@ -1,4 +1,7 @@
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from taxi_seeder import preflight
 from taxi_seeder.config import from_env
@@ -60,3 +63,38 @@ def test_seed_mappings_tolerates_a_missing_baked_dir(tmp_path):
     s = settings_for(tmp_path)
     preflight.ensure_directories(s)
     assert preflight.seed_mappings(s, baked_dir=tmp_path / "nope") == []
+
+
+# --- taxi-load month capability --------------------------------------------
+
+def _help(text):
+    def helper(cmd):
+        return subprocess.CompletedProcess(cmd, 0, text, "")
+    return helper
+
+
+def test_month_support_is_detected_from_the_help_text():
+    assert preflight.taxi_load_supports_months(
+        helper=_help("options:\n  --month {1..12}\n")) is True
+
+
+def test_month_support_is_absent_from_an_older_taxi_load():
+    assert preflight.taxi_load_supports_months(
+        helper=_help("options:\n  --full-refresh\n")) is False
+
+
+def test_month_support_is_false_when_taxi_load_cannot_be_run():
+    def helper(cmd):
+        raise FileNotFoundError("taxi-load")
+
+    assert preflight.taxi_load_supports_months(helper=helper) is False
+
+
+def test_require_month_support_explains_how_to_fix_it():
+    with pytest.raises(preflight.TaxiLoadTooOldError, match="--month"):
+        preflight.require_month_support(helper=_help("options:\n"))
+
+
+def test_require_month_support_is_quiet_when_supported():
+    assert preflight.require_month_support(
+        helper=_help("  --month {1..12}")) is None

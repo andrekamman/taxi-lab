@@ -42,6 +42,23 @@ def table_rows(settings: Settings, data_type: str, *, runner=None) -> int | None
     return int(raw)
 
 
+def table_rows_total(settings: Settings, data_types, *, runner=None) -> int | None:
+    """Committed rows across every selected trip type, or None.
+
+    None if any part is unknown: a partial sum would be a wrong number, not a
+    smaller one, and the heartbeat would render it as real progress.
+    """
+    total = 0
+    seen = False
+    for data_type in data_types:
+        rows = table_rows(settings, data_type, runner=runner)
+        if rows is None:
+            return None
+        total += rows
+        seen = True
+    return total if seen else None
+
+
 def _count(root: Path, data_type: str) -> int:
     d = root / data_type
     return len(list(d.rglob("*.parquet"))) if d.is_dir() else 0
