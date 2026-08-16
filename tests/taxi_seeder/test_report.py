@@ -70,3 +70,32 @@ def test_loaded_rows_is_empty_when_the_manifest_is_missing(tmp_path):
         return subprocess.CompletedProcess(cmd, 1, "", "Invalid object name")
 
     assert report.loaded_rows(settings_for(tmp_path), runner=failing) == {}
+
+
+def test_table_rows_parses_the_scalar(tmp_path):
+    import subprocess
+
+    def runner(cmd, env, stdin_text):
+        return subprocess.CompletedProcess(cmd, 0, "28400254\n", "")
+
+    assert report.table_rows(settings_for(tmp_path), "fhvhv", runner=runner) == 28400254
+
+
+def test_table_rows_returns_none_when_sampling_fails(tmp_path):
+    """The heartbeat thread calls this. A dropped connection must cost a
+    progress line, not the load."""
+    import subprocess
+
+    def failing(cmd, env, stdin_text):
+        return subprocess.CompletedProcess(cmd, 1, "", "connection reset")
+
+    assert report.table_rows(settings_for(tmp_path), "fhvhv", runner=failing) is None
+
+
+def test_table_rows_returns_none_for_a_non_numeric_answer(tmp_path):
+    import subprocess
+
+    def runner(cmd, env, stdin_text):
+        return subprocess.CompletedProcess(cmd, 0, "NULL\n", "")
+
+    assert report.table_rows(settings_for(tmp_path), "fhvhv", runner=runner) is None

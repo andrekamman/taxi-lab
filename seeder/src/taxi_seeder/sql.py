@@ -91,6 +91,27 @@ def rows_per_type(schema: str) -> str:
     )
 
 
+def loaded_table_rows(schema: str, data_type: str) -> str:
+    """Committed rows across every year table of one trip type.
+
+    Deliberately not _load_manifest, which rows_per_type above already reads:
+    execute_year_plan's RELOAD branch copies a whole year in one statement and
+    writes its manifest rows only afterwards, so the manifest reports zero for
+    the entire two hours a large year takes. sys.partitions moves the whole
+    time, which is the point of a heartbeat.
+    """
+    sch = validate_identifier(schema, "schema")
+    dt = validate_identifier(data_type, "trip type")
+    return (
+        "SELECT ISNULL(SUM(p.rows), 0) FROM sys.tables t "
+        "JOIN sys.schemas s ON s.schema_id = t.schema_id "
+        "JOIN sys.partitions p ON p.object_id = t.object_id "
+        "AND p.index_id IN (0, 1) "
+        f"WHERE s.name = '{_lit(sch)}' "
+        f"AND t.name LIKE '{_lit(dt)}\\_%' ESCAPE '\\'"
+    )
+
+
 def database_backup(database: str, directory: str) -> str:
     return (
         "EXECUTE dbo.DatabaseBackup "

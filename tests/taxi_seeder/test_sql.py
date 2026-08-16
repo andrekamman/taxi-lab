@@ -189,3 +189,23 @@ def test_rows_per_type_rejects_bad_identifier():
     """Coverage: rows_per_type validates its identifier argument."""
     with pytest.raises(sql.SqlIdentifierError):
         sql.rows_per_type("bad name")
+
+
+def test_loaded_table_rows_targets_the_year_tables_of_one_type():
+    out = sql.loaded_table_rows("dbo", "fhvhv")
+    assert "sys.partitions" in out
+    assert "index_id IN (0, 1)" in out
+    assert "s.name = 'dbo'" in out
+    # The underscore in "fhvhv_2019" is a LIKE wildcard and MUST be escaped,
+    # or "fhvhvX2019" would match too.
+    assert r"t.name LIKE 'fhvhv\_%' ESCAPE '\'" in out
+
+
+def test_loaded_table_rows_rejects_a_bad_schema():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.loaded_table_rows("dbo; DROP TABLE x --", "fhvhv")
+
+
+def test_loaded_table_rows_rejects_a_bad_type():
+    with pytest.raises(sql.SqlIdentifierError):
+        sql.loaded_table_rows("dbo", "fhvhv'; --")

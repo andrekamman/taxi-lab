@@ -26,6 +26,22 @@ def loaded_rows(settings: Settings, *, runner=None) -> dict[str, int]:
     return rows
 
 
+def table_rows(settings: Settings, data_type: str, *, runner=None) -> int | None:
+    """Live committed row count for one trip type, or None if it can't be read.
+
+    None rather than an exception: this is called from the heartbeat thread, and
+    a progress line must never be able to kill a load that is going fine.
+    """
+    try:
+        raw = mssql.scalar(settings, sql.loaded_table_rows(settings.schema, data_type),
+                           database=settings.database, runner=runner)
+    except mssql.MssqlError:
+        return None
+    if raw is None or not raw.isdigit():
+        return None
+    return int(raw)
+
+
 def _count(root: Path, data_type: str) -> int:
     d = root / data_type
     return len(list(d.rglob("*.parquet"))) if d.is_dir() else 0
