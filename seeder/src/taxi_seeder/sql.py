@@ -165,3 +165,17 @@ def prepare_maintenance_solution(text: str, backup_directory: str) -> str:
     return directory.sub(
         lambda m: m.group(1) + f"N'{_lit(str(backup_directory))}'", text, count=1
     )
+
+
+def set_max_server_memory(mb: int) -> str:
+    """Cap the buffer pool. Dynamic -- no restart, unlike memory.memorylimitmb."""
+    if isinstance(mb, bool) or not isinstance(mb, int):
+        raise ValueError(f"max server memory must be an int, got {mb!r}")
+    if mb < 1:
+        raise ValueError(f"max server memory must be >= 1, got {mb}")
+    return (
+        "EXEC sp_configure 'show advanced options', 1;\n"
+        "RECONFIGURE;\n"
+        f"EXEC sp_configure 'max server memory (MB)', {mb};\n"
+        "RECONFIGURE;"
+    )

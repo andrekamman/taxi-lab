@@ -30,6 +30,7 @@ class Settings:
     log_size_gb: int | None
     filegrowth_mb: int
     progress_interval_s: int
+    mssql_max_memory_mb: int | None
 
     @property
     def raw_normalized_dir(self) -> Path:
@@ -126,6 +127,13 @@ def from_env(env: Mapping[str, str]) -> Settings:
     if log_size_gb is not None and log_size_gb < 1:
         raise ConfigError(f"MSSQL_LOG_SIZE_GB must be >= 1, got {log_size_gb}")
 
+    max_mem_raw = (env.get("MSSQL_MAX_MEMORY_MB") or "").strip()
+    mssql_max_memory_mb = _int(env, "MSSQL_MAX_MEMORY_MB", 0) if max_mem_raw else None
+    if mssql_max_memory_mb is not None and mssql_max_memory_mb < 1024:
+        raise ConfigError(
+            f"MSSQL_MAX_MEMORY_MB must be >= 1024, got {mssql_max_memory_mb}"
+        )
+
     progress_interval_s = _int(env, "TAXI_PROGRESS_INTERVAL_S", 60)
     if progress_interval_s < 0:
         raise ConfigError(
@@ -151,4 +159,5 @@ def from_env(env: Mapping[str, str]) -> Settings:
         log_size_gb=log_size_gb,
         filegrowth_mb=_int(env, "MSSQL_FILEGROWTH_MB", 1024),
         progress_interval_s=progress_interval_s,
+        mssql_max_memory_mb=mssql_max_memory_mb,
     )

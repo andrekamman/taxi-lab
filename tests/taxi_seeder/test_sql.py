@@ -209,3 +209,21 @@ def test_loaded_table_rows_rejects_a_bad_schema():
 def test_loaded_table_rows_rejects_a_bad_type():
     with pytest.raises(sql.SqlIdentifierError):
         sql.loaded_table_rows("dbo", "fhvhv'; --")
+
+
+def test_set_max_server_memory_reconfigures():
+    out = sql.set_max_server_memory(24057)
+    assert "sp_configure 'show advanced options', 1" in out
+    assert "sp_configure 'max server memory (MB)', 24057" in out
+    assert out.count("RECONFIGURE") == 2
+
+
+def test_set_max_server_memory_rejects_a_non_integer():
+    with pytest.raises(ValueError):
+        sql.set_max_server_memory("24057; DROP DATABASE taxi")
+
+
+def test_set_max_server_memory_rejects_a_bool():
+    """bool is an int subclass, and `True` would render as the literal 1."""
+    with pytest.raises(ValueError):
+        sql.set_max_server_memory(True)

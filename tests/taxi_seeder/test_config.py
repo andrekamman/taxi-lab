@@ -117,3 +117,20 @@ def test_progress_interval_rejects_a_negative():
 
 def test_progress_interval_treats_empty_as_unset():
     assert from_env({**BASE, "TAXI_PROGRESS_INTERVAL_S": ""}).progress_interval_s == 60
+
+
+def test_mssql_max_memory_defaults_to_none():
+    assert from_env(BASE).mssql_max_memory_mb is None
+
+
+def test_mssql_max_memory_is_read_when_set():
+    assert from_env({**BASE, "MSSQL_MAX_MEMORY_MB": "24576"}).mssql_max_memory_mb == 24576
+
+
+def test_mssql_max_memory_rejects_below_the_floor():
+    with pytest.raises(ConfigError, match="MSSQL_MAX_MEMORY_MB"):
+        from_env({**BASE, "MSSQL_MAX_MEMORY_MB": "512"})
+
+
+def test_mssql_max_memory_treats_empty_as_unset():
+    assert from_env({**BASE, "MSSQL_MAX_MEMORY_MB": ""}).mssql_max_memory_mb is None

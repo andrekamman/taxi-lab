@@ -1,9 +1,12 @@
 from pathlib import Path
 
+import pytest
+
 from taxi_seeder.sizing import (
     data_size_mb,
     fits_on_disk,
     log_size_mb,
+    max_server_memory_mb,
     needs_growth_warning,
     parquet_bytes,
     required_disk_mb,
@@ -127,3 +130,19 @@ def test_fits_on_disk_false_when_short():
 
 def test_fits_on_disk_true_at_exact_boundary():
     assert fits_on_disk(required_mb=1000, free_mb=1000) is True
+
+
+@pytest.mark.parametrize("host_mb,expected", [
+    (32076, 24057),   # the 32 GB devbox -> ~24 GB, reserve 25%
+    (16384, 12288),   # 16 GB -> reserve the 4 GB floor
+    (8192, 4096),     # 8 GB  -> reserve the 4 GB floor
+    (65536, 49152),   # 64 GB -> reserve 25%
+    (2048, 1024),     # tiny  -> clamped to the 1 GB floor
+])
+def test_max_server_memory_mb(host_mb, expected):
+    assert max_server_memory_mb(host_mb) == expected
+
+
+def test_max_server_memory_mb_rejects_nonsense():
+    with pytest.raises(ValueError):
+        max_server_memory_mb(0)

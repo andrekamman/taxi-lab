@@ -133,3 +133,44 @@ def run(settings: Settings, *, runner=None) -> bool:
     mssql.run(settings, sql.set_recovery_simple(settings.database),
               database="master", runner=runner)
     return True
+
+
+def _host_total_mb() -> int | None:
+    """Host RAM in MB from /proc/meminfo.
+
+    The mssql service has no container memory limit, so the host total is the
+    number that matters. None when unreadable -- on a platform where this file
+    is absent we leave SQL Server's own default alone rather than guess.
+    """
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def apply_memory_cap(settings: Settings, *, runner=None, meminfo=None) -> int | None:
+    """Set `max server memory`. Returns the cap applied, or None if skipped.
+
+    sp_configure rather than the container's MSSQL_MEMORY_LIMIT_MB because it is
+    dynamic -- no restart -- and it lets the default be computed from the actual
+    host instead of hardcoded per machine.
+    """
+    if settings.mssql_max_memory_mb is not None:
+        cap = settings.mssql_max_memory_mb
+        source = "MSSQL_MAX_MEMORY_MB"
+    else:
+        host_mb = (meminfo or _host_total_mb)()
+        if host_mb is None:
+            print("memory: host RAM unreadable, leaving max server memory at "
+                  "SQL Server's default (80% of host)")
+            return None
+        cap = sizing.max_server_memory_mb(host_mb)
+        source = f"derived from {host_mb} MB host RAM"
+    mssql.run(settings, sql.set_max_server_memory(cap),
+              database="master", runner=runner)
+    print(f"memory: max server memory set to {cap} MB ({source})")
+    return cap

@@ -273,3 +273,31 @@ def test_disk_space_is_not_checked_on_the_attach_path(tmp_path, monkeypatch):
 
     assert provision.run(s, runner=rec) is True
     assert "FOR ATTACH" in "\n".join(rec.statements)
+
+
+def test_apply_memory_cap_uses_the_override(tmp_path):
+    sent = []
+
+    def runner(cmd, env, stdin_text):
+        sent.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    s = settings_for(tmp_path, MSSQL_MAX_MEMORY_MB="20000")
+    assert provision.apply_memory_cap(s, runner=runner,
+                                      meminfo=lambda: 32076) == 20000
+    assert any("20000" in " ".join(c) for c in sent)
+
+
+def test_apply_memory_cap_derives_from_host_ram_when_unset(tmp_path):
+    s = settings_for(tmp_path)
+    assert provision.apply_memory_cap(
+        s, runner=lambda *a: subprocess.CompletedProcess([], 0, "", ""),
+        meminfo=lambda: 32076) == 24057
+
+
+def test_apply_memory_cap_skips_when_host_ram_is_unreadable(tmp_path):
+    """Leave SQL Server's own default alone rather than guess."""
+    s = settings_for(tmp_path)
+    assert provision.apply_memory_cap(
+        s, runner=lambda *a: subprocess.CompletedProcess([], 0, "", ""),
+        meminfo=lambda: None) is None

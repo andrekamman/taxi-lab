@@ -3,6 +3,13 @@ import pytest
 from taxi_seeder import backup, cli, mssql, ola, preflight, provision, report, stages
 
 
+@pytest.fixture(autouse=True)
+def no_memory_cap(monkeypatch):
+    """The memory cap shells out to sqlcmd, so every pipeline test would try to
+    run it for real. The test that exercises it overrides this."""
+    monkeypatch.setattr(provision, "apply_memory_cap", lambda s, **kw: None)
+
+
 def test_help_exits_0_and_prints_usage_without_touching_pipeline(monkeypatch, capsys):
     monkeypatch.setattr(preflight, "run", _never_called("preflight.run"))
 
@@ -38,7 +45,7 @@ def test_help_documents_every_variable_the_config_reads(capsys):
                 "TAXI_DATA_FACTOR", "MSSQL_DATA_SIZE_GB", "MSSQL_LOG_SIZE_GB",
                 "MSSQL_FILEGROWTH_MB", "MSSQL_HOST", "MSSQL_PORT",
                 "MSSQL_DATABASE", "MSSQL_SCHEMA", "MSSQL_USER",
-                "TAXI_PROGRESS_INTERVAL_S"):
+                "TAXI_PROGRESS_INTERVAL_S", "MSSQL_MAX_MEMORY_MB"):
         assert var in out
 
 
@@ -430,3 +437,20 @@ def test_a_heartbeat_is_not_started_when_the_interval_is_zero(
 
     assert cli.main([]) == 0
     assert all(hb.kwargs["interval_s"] == 0 for hb in recorded_heartbeats)
+
+
+def test_main_applies_the_memory_cap_before_provisioning(
+        monkeypatch, tmp_path, capsys):
+    """Server-level configuration, so it is its own step rather than part of
+    provision -- and it must land before anything heavy runs."""
+    _base_env(monkeypatch, tmp_path, "green")
+    monkeypatch.setenv("TAXI_PROGRESS_INTERVAL_S", "0")
+    _stub_a_clean_run(monkeypatch)
+    calls = []
+    monkeypatch.setattr(provision, "apply_memory_cap",
+                        lambda s, **kw: calls.append("memory") or 24057)
+    monkeypatch.setattr(provision, "run", lambda s, **kw: calls.append("provision"))
+
+    assert cli.main([]) == 0
+    assert calls == ["memory", "provision"]
+    assert "memory: starting" in capsys.readouterr().out

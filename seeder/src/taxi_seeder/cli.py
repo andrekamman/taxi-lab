@@ -51,6 +51,8 @@ environment variables:
   MSSQL_SCHEMA          schema holding the loaded tables (default: dbo); same
                         identifier rule
   MSSQL_USER            SQL login (default: sa)
+  MSSQL_MAX_MEMORY_MB   SQL Server 'max server memory' in MB (default:
+                        host RAM minus the larger of 4 GB and 25%)
   TAXI_PROGRESS_INTERVAL_S
                         seconds between progress lines during mirror and load
                         (default: 60; 0 disables)
@@ -162,6 +164,7 @@ def main(argv=None) -> int:
                       f"stopping", file=sys.stderr)
                 return worst(codes)
 
+        _stage(settings, "memory", lambda: provision.apply_memory_cap(settings))
         _stage(settings, "provision", lambda: provision.run(settings))
         _stage(settings, "ola", lambda: ola.run(settings))
 
