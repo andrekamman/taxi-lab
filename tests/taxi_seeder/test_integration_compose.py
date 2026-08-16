@@ -133,10 +133,18 @@ def data_dir(tmp_path_factory):
     compose("down", "-v", data_dir=d, check=False)
 
 
+# The first run's log, kept so the fan-out assertions below can read it without
+# paying for a second half-hour run. sys.dm_exec_requests would show the
+# concurrent bulk streams directly, but it is a live view and these tests run
+# after `--abort-on-container-exit` has already stopped the stack.
+_FIRST_RUN_LOG: list[str] = []
+
+
 def test_first_run_produces_the_full_deliverable_set(data_dir):
     result = compose("up", "--build", "--abort-on-container-exit",
                      "--exit-code-from", "seeder", data_dir=data_dir, check=False,
                      timeout=1800)
+    _FIRST_RUN_LOG.append(result.stdout + result.stderr)
     assert result.returncode == 0, result.stdout + result.stderr
 
     assert list((data_dir / "raw" / "yellow").rglob("*.parquet"))
@@ -179,3 +187,42 @@ def test_second_run_is_a_near_noop(data_dir):
              for p in (data_dir / "mssql" / "backup").rglob("*.bak")}
     assert after == before, "a no-op run must not produce a new backup"
     assert "0 row(s) loaded" in result.stdout or "skip" in result.stdout.lower()
+
+
+def test_the_load_fanned_out_across_month_shards():
+    """Proves the run dispatched shards rather than one process per trip type."""
+    if not _FIRST_RUN_LOG:
+        pytest.skip("the first-run test did not execute")
+    log = _FIRST_RUN_LOG[0]
+
+    assert "month shard(s) across" in log, log[-4000:]
+    # One completion line per month is the observability win month shards
+    # were chosen for.
+    assert log.count(": done (exit 0)") >= 2, log[-4000:]
+
+
+def test_concurrent_months_do_not_duplicate_rows(data_dir):
+    """Every year table must end up agreeing with its manifest exactly.
+
+    This is the assertion that would catch the BU-lock assumption being wrong,
+    or two workers both appending the same month.
+    """
+    out = sqlcmd(data_dir, """
+        WITH t AS (
+          SELECT TRY_CAST(RIGHT(tb.name, 4) AS INT) AS year,
+                 LEFT(tb.name, LEN(tb.name) - 5) AS data_type,
+                 SUM(p.rows) AS table_rows
+          FROM taxi.sys.tables tb
+          JOIN taxi.sys.partitions p ON p.object_id = tb.object_id
+           AND p.index_id IN (0, 1)
+          WHERE tb.name LIKE '%[_]20[0-9][0-9]'
+          GROUP BY tb.name
+        ), m AS (
+          SELECT data_type, year, SUM(row_count) AS manifest_rows
+          FROM taxi.dbo._load_manifest GROUP BY data_type, year
+        )
+        SELECT COUNT(*) FROM t JOIN m
+          ON m.year = t.year AND m.data_type = t.data_type
+        WHERE t.table_rows <> m.manifest_rows
+    """)
+    assert out == "0"

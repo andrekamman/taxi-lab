@@ -102,6 +102,49 @@ docker compose ps
 docker compose logs --tail 20 seeder
 ```
 
+#### Load performance
+
+Loading runs one `taxi-load` process per (trip type, year, month) — one process
+per normalized parquet file. Several processes load different months into the same
+year table at once: `TABLOCK` takes a BU (bulk update) lock, and BU locks are
+compatible with each other, which is what SQL Server's parallel bulk import is
+built on. The table layout is unchanged — no month tables, no views.
+
+A single stream is CPU-bound, not disk-bound. Measured on 2026-08-15: `dop=1`,
+87% on-CPU, 3 MB/s against a disk that does 1.3 GB/s, with the host 85% idle and
+one core of eight busy. Parallelism is process-level because the duckdb `mssql`
+extension keeps its ATTACH context process-global — two loads in one process
+would collide on it.
+
+```bash
+TAXI_LOAD_WORKERS=6 docker compose up -d   # default: CPU count - 2, capped at 6
+TAXI_LOAD_WORKERS=1 docker compose up -d   # serial, the pre-parallel behaviour
+```
+
+Before any shard runs, an integrity pass resets any year whose committed rows
+disagree with its manifest. That is also the recovery granularity: a bulk load
+commits per 100,000 rows and is not atomic, so a run killed mid-shard leaves rows
+the year-level check has to clear. Shards are ordered year-major so the workers
+finish one year before starting the next, which keeps a kill to one or two years
+rather than six.
+
+Because fan-out cannot halt on the first failure — the siblings are already
+running — every dispatched shard finishes, every failure is reported, the worst
+exit code wins, and the backup is skipped unless everything was clean.
+
+SQL Server's memory is capped before provisioning to host RAM minus the larger of
+4 GB and 25%. Override it for a differently-sized box:
+
+```bash
+MSSQL_MAX_MEMORY_MB=24576   # in .env
+```
+
+> **Requires a taxi-seed with `taxi-load --year/--month`.** The seeder checks for
+> it and stops with exit 2 before dispatching anything if the installed
+> `taxi-load` is older. Speed-up figures are not quoted here yet: the before
+> numbers above are measured, and the after numbers will be filled in from a real
+> parallel run rather than a projection.
+
 See the [design spec](docs/specs/2026-08-01-seeder-container-design.md) for the
 configuration variables and the decisions behind them.
 
