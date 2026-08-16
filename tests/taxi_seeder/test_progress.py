@@ -4,6 +4,8 @@ Nothing here waits on wall time: every collaborator that would -- the clock, the
 sleeper, the sampler -- is injected, which is the reason progress.py splits pure
 formatting from the thread in the first place.
 """
+import threading
+
 import pytest
 
 from taxi_seeder import progress
@@ -179,3 +181,93 @@ def test_normalized_files_is_zero_before_the_tree_exists(tmp_path):
 def test_normalized_files_ignores_other_trip_types(tmp_path):
     _normalized(tmp_path, "yellow_tripdata_2019-02.parquet", data_type="yellow")
     assert progress.normalized_files(settings_for(tmp_path), "fhvhv") == 0
+
+
+def test_heartbeat_emits_nothing_when_disabled():
+    written = []
+    with progress.Heartbeat("load fhvhv", lambda: 1, interval_s=0,
+                            out=written.append):
+        pass
+    assert written == []
+
+
+def test_heartbeat_starts_no_thread_when_disabled():
+    before = threading.active_count()
+    with progress.Heartbeat("load fhvhv", lambda: 1, interval_s=0,
+                            out=lambda m: None):
+        assert threading.active_count() == before
+
+
+def test_heartbeat_emits_a_line_per_tick_with_a_rate():
+    written = []
+    samples = iter([10_000_000, 12_000_000, 14_000_000])
+    ticks = iter([0.0, 60.0, 120.0, 180.0])
+
+    with progress.Heartbeat(
+        "load fhvhv", lambda: next(samples), total=100_000_000,
+        interval_s=60, out=written.append, clock=lambda: next(ticks),
+        stamp=lambda: "07:13:42", sleeper=lambda s: None, max_ticks=3,
+    ):
+        pass
+
+    assert len(written) == 3
+    assert written[0].startswith("[07:13:42] load fhvhv: 10.0M/100M rows (10.0%)")
+    # The first tick has no previous sample, so it cannot report a rate.
+    assert "rows/min" not in written[0]
+    assert "2.00M rows/min" in written[1]
+    assert written[1].endswith("elapsed 2m00s, eta 44m00s")
+
+
+def test_heartbeat_passes_its_unit_through():
+    written = []
+    with progress.Heartbeat(
+        "mirror yellow", lambda: 37, interval_s=60, unit="files",
+        out=written.append, clock=iter([0.0, 60.0]).__next__,
+        stamp=lambda: "07:13:42", sleeper=lambda s: None, max_ticks=1,
+    ):
+        pass
+    assert written == ["[07:13:42] mirror yellow: 37 files, elapsed 1m00s"]
+
+
+def test_heartbeat_reports_unavailable_when_sampling_raises():
+    written = []
+
+    def sample():
+        raise RuntimeError("sqlcmd died")
+
+    with progress.Heartbeat(
+        "load fhvhv", sample, interval_s=60, out=written.append,
+        clock=iter([0.0, 60.0]).__next__, stamp=lambda: "07:13:42",
+        sleeper=lambda s: None, max_ticks=1,
+    ):
+        pass
+
+    assert "rows unavailable" in written[0]
+
+
+def test_heartbeat_emits_nothing_when_the_stage_ends_during_an_interval():
+    """A stage that finishes 3 seconds into a 60-second interval must not have
+    a stale line appended after its "done" announcement."""
+    written = []
+    with progress.Heartbeat(
+        "load fhvhv", lambda: 1, interval_s=60, out=written.append,
+        stamp=lambda: "07:13:42", sleeper=lambda s: True,
+    ):
+        pass
+    assert written == []
+
+
+def test_heartbeat_thread_is_joined_on_exit():
+    before = threading.active_count()
+    with progress.Heartbeat("load fhvhv", lambda: 1, interval_s=60,
+                            out=lambda m: None, sleeper=lambda s: None,
+                            max_ticks=1, stamp=lambda: "07:13:42"):
+        pass
+    assert threading.active_count() == before
+
+
+def test_heartbeat_does_not_swallow_the_body_exception():
+    with pytest.raises(ValueError):
+        with progress.Heartbeat("load fhvhv", lambda: 1, interval_s=0,
+                                out=lambda m: None):
+            raise ValueError("the stage blew up")

@@ -6,6 +6,7 @@ testable only while it stays free of the thread that drives it.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 from taxi_seeder.config import Settings
@@ -141,3 +142,84 @@ def normalized_files(settings: Settings, data_type: str) -> int | None:
         return sum(1 for _ in base.rglob("*.parquet")) if base.is_dir() else 0
     except OSError:
         return None
+
+
+class Heartbeat:
+    """Emit one progress line every `interval_s` while the body runs.
+
+    The thread is a daemon and every collaborator is injectable, so the tests
+    drive it with a fake clock and a fake sleeper and never wait on wall time.
+    `interval_s=0` disables it and starts no thread at all.
+
+    `sleeper(seconds)` returns true when the run ended during the interval --
+    threading.Event.wait's own contract, which is why it is the default. That
+    one convention is what keeps a stage which finishes three seconds into a
+    sixty-second interval from printing a stale line after its "done" line.
+    """
+
+    def __init__(self, label: str, sample, *, total: int | None = None,
+                 interval_s: int = 60, unit: str = "rows", out=print,
+                 clock=time.monotonic, stamp=None, sleeper=None,
+                 max_ticks: int | None = None):
+        self._label = label
+        self._sample = sample
+        self._total = total
+        self._interval = interval_s
+        self._unit = unit
+        self._out = out
+        self._clock = clock
+        self._stamp = stamp or (lambda: utc_hms(time.time()))
+        self._stop = threading.Event()
+        self._sleeper = sleeper or self._stop.wait
+        # Bounds the loop so the tests get an exact number of ticks instead of
+        # racing __exit__ for them. Production leaves it None.
+        self._max_ticks = max_ticks
+        self._started: float | None = None
+        self._prev_rows: int | None = None
+        self._prev_at: float | None = None
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> "Heartbeat":
+        self._started = self._clock()
+        if self._interval > 0:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval + 5)
+        return False
+
+    def _loop(self) -> None:
+        ticks = 0
+        while self._max_ticks is None or ticks < self._max_ticks:
+            if self._sleeper(self._interval):
+                return
+            self._tick()
+            ticks += 1
+
+    def _tick(self) -> None:
+        now = self._clock()
+        # `self._started or now` would be wrong: a monotonic clock legitimately
+        # reads 0.0, and that is exactly what the tests inject.
+        started = now if self._started is None else self._started
+        try:
+            rows = self._sample()
+        except Exception:
+            # A sampling failure costs a progress line, never the load.
+            rows = None
+
+        per_min = None
+        if rows is not None and self._prev_rows is not None and self._prev_at is not None:
+            per_min = rows_per_min(rows - self._prev_rows, now - self._prev_at)
+        if rows is not None:
+            self._prev_rows, self._prev_at = rows, now
+
+        emit(
+            format_progress(self._label, rows=rows, total=self._total,
+                            per_min=per_min, elapsed_s=now - started,
+                            unit=self._unit),
+            now=self._stamp(), out=self._out,
+        )
