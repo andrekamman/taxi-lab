@@ -13,7 +13,8 @@ k6-loadtest/output/
 k6-loadtest/config.yaml
 k6_output/
 
-# seeder: local compose env and any data dir accidentally created in-tree
+# taxi-mssql (formerly seeder/, now in taxi-seed) left a local compose env behind.
+# Kept ignored so an old checkout's credentials never get committed by accident.
 seeder/.env
 data/
 
